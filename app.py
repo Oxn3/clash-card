@@ -10,18 +10,18 @@ st.write("Enter troop counts for your clan members below, or upload an existing 
 
 # --- Initial Default Data Generator ---
 DEFAULT_CARDS = [
-    ("Barbarian", "Common", False),
-    ("Archer", "Common", False),
-    ("Giant", "Rare", False),
-    ("Wizard", "Rare", False),
-    ("Pekka", "Epic", False),
-    ("Super Barbarian", "Common", True),
-    ("Super Wizard", "Rare", True),
+    ("Raged Barbarian", "Builder Elixir"),
+    ("Sneaky Archer", "Builder Elixir"),
+    ("Minion", "Dark Elixir"),
+    ("Hog Rider", "Dark Elixir"),
+    ("Wall Breaker", "Elixir"),
+    ("Balloon", "Elixir"),
+    ("Super Dragon", "Elixir"),
 ]
 
 def get_default_df():
     data = {"Card": [c[0] for c in DEFAULT_CARDS], "Type": [c[1] for c in DEFAULT_CARDS]}
-    # Default 3 players
+    # Sample starting counts for 3 players
     data["Player_1"] = [2, 0, 1, 0, 0, 1, 0]
     data["Player_2"] = [0, 2, 0, 1, 0, 0, 0]
     data["Player_3"] = [0, 0, 0, 0, 2, 0, 1]
