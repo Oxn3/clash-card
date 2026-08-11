@@ -8,27 +8,99 @@ st.set_page_config(page_title="Clash Trade Optimizer", layout="wide", page_icon=
 st.title("⚔️ Clash Cards Trade Optimizer")
 st.write("Enter troop counts for your clan members below, or upload an existing Excel file, then click **Optimize Trades**!")
 
-# --- Initial Default Data Generator ---
-DEFAULT_CARDS = [
-    ("Raged Barbarian", "Builder Elixir"),
-    ("Sneaky Archer", "Builder Elixir"),
-    ("Minion", "Dark Elixir"),
-    ("Hog Rider", "Dark Elixir"),
-    ("Wall Breaker", "Elixir"),
-    ("Balloon", "Elixir"),
-    ("Super Dragon", "Elixir"),
+# --- Initial Default Data Generator matching Template ---
+TEMPLATE_DATA = [
+    {"Troop Name": "Raged Barbarian", "Upgrade Resource": "Builder Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Sneaky Archer", "Upgrade Resource": "Builder Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Boxer Giant", "Upgrade Resource": "Builder Elixir", "Eludidator": 2, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 2},
+    {"Troop Name": "Beta Minion", "Upgrade Resource": "Builder Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Bomber", "Upgrade Resource": "Builder Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Baby Dragon (Builder Base)", "Upgrade Resource": "Builder Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 2, "Dark Repulser": 0},
+    {"Troop Name": "Cannon Cart", "Upgrade Resource": "Builder Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Night Witch", "Upgrade Resource": "Builder Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Drop Ship", "Upgrade Resource": "Builder Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Power P.E.K.K.A", "Upgrade Resource": "Builder Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Hog Glider", "Upgrade Resource": "Builder Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Minion", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Hog Rider", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 2, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Valkyrie", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Golem", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Witch", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 2, "Night Sky": 2, "Dark Repulser": 1},
+    {"Troop Name": "Lava Hound", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 2, "Dark Repulser": 1},
+    {"Troop Name": "Bowler", "Upgrade Resource": "Dark Elixir", "Eludidator": 2, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Ice Golem", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Headhunter", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Apprentice Warden", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Druid", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Furnace", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Ruin Witch", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 2},
+    {"Troop Name": "Super Minion", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Super Valkyrie", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Super Witch", "Upgrade Resource": "Dark Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Ice Hound", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Super Bowler", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Super Hog Rider", "Upgrade Resource": "Dark Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Barbarian", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 2, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Archer", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Giant", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Goblin", "Upgrade Resource": "Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Wall Breaker", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 2},
+    {"Troop Name": "Balloon", "Upgrade Resource": "Elixir", "Eludidator": 2, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Wizard", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Healer", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Dragon", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "P.E.K.K.A", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Baby Dragon", "Upgrade Resource": "Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Miner", "Upgrade Resource": "Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Electro Dragon", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Yeti", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Dragon Rider", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Electro Titan", "Upgrade Resource": "Elixir", "Eludidator": 2, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 2},
+    {"Troop Name": "Root Rider", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 2, "Night Sky": 3, "Dark Repulser": 2},
+    {"Troop Name": "Thrower", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 2},
+    {"Troop Name": "Meteor Golem", "Upgrade Resource": "Elixir", "Eludidator": 2, "Lambent Light": 1, "Night Sky": 2, "Dark Repulser": 1},
+    {"Troop Name": "Super Barbarian", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Super Archer", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 1},
+    {"Troop Name": "Super Giant", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Sneaky Goblin", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Super Wall Breaker", "Upgrade Resource": "Elixir", "Eludidator": 0, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Rocket Balloon", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Super Wizard", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Super Dragon", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 0},
+    {"Troop Name": "Inferno Dragon", "Upgrade Resource": "Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 0, "Dark Repulser": 1},
+    {"Troop Name": "Super Miner", "Upgrade Resource": "Elixir", "Eludidator": 0, "Lambent Light": 1, "Night Sky": 1, "Dark Repulser": 0},
+    {"Troop Name": "Super Yeti", "Upgrade Resource": "Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 0, "Dark Repulser": 2}
 ]
 
 def get_default_df():
-    data = {"Card": [c[0] for c in DEFAULT_CARDS], "Type": [c[1] for c in DEFAULT_CARDS]}
-    # Sample starting counts for 3 players
-    data["Player_1"] = [2, 0, 1, 0, 0, 1, 0]
-    data["Player_2"] = [0, 2, 0, 1, 0, 0, 0]
-    data["Player_3"] = [0, 0, 0, 0, 2, 0, 1]
-    return pd.DataFrame(data)
+    return pd.DataFrame(TEMPLATE_DATA)
+
+# Helper function to convert dataframe to downloadable Excel bytes
+def to_excel_bytes(df_to_export, sheet_name='Sheet1'):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_to_export.to_excel(writer, index=False, sheet_name=sheet_name)
+    return output.getvalue()
 
 # --- Sidebar Controls ---
 st.sidebar.header("Data Options")
+
+# 📥 Download Sample Excel Template
+sample_df = get_default_df()
+sample_excel_data = to_excel_bytes(sample_df, sheet_name='Card_Inventory')
+
+st.sidebar.subheader("📄 Need a template?")
+st.sidebar.download_button(
+    label="📄 Download Sample Excel (.xlsx)",
+    data=sample_excel_data,
+    file_name="Clash_Cards_Sample_Template.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+st.sidebar.divider()
+
+# 📤 Upload Excel File
+st.sidebar.subheader("📤 Upload Data")
 uploaded_file = st.sidebar.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
@@ -46,7 +118,7 @@ def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
 
-    type_matches = [c for c in data_df.columns if "type" in str(c).lower()]
+    type_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["type", "resource"])]
     type_col = type_matches[0] if type_matches else (data_df.columns[1] if len(data_df.columns) > 1 else data_df.columns[0])
 
     player_cols = [c for c in data_df.columns if c not in [card_col, type_col]]
@@ -166,13 +238,6 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df
 
-# Helper function to convert dataframe to downloadable Excel bytes
-def to_excel_bytes(df_to_export):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_to_export.to_excel(writer, index=False, sheet_name='Updated_Inventory')
-    return output.getvalue()
-
 # --- Run Action ---
 if st.button("🚀 Optimize Trades", type="primary"):
     with st.spinner("Calculating optimal multi-player trade chains..."):
@@ -192,7 +257,7 @@ if st.button("🚀 Optimize Trades", type="primary"):
     st.subheader("📥 Download Updated Inventory")
     st.write("Click below to download the updated Excel file reflecting card totals after all trades are executed:")
     
-    excel_data = to_excel_bytes(updated_inventory_df)
+    excel_data = to_excel_bytes(updated_inventory_df, sheet_name='Updated_Inventory')
     st.download_button(
         label="💾 Download Updated Workbook (.xlsx)",
         data=excel_data,
