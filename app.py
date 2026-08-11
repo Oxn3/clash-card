@@ -8,6 +8,10 @@ st.set_page_config(page_title="Clash Trade Optimizer", layout="wide", page_icon=
 st.title("⚔️ Clash Cards Trade Optimizer")
 st.write("Enter troop counts for your clan members below, or upload an existing Excel file, then click **Optimize Trades**!")
 
+# --- Initialize Session State for Multi-Stage Optimization ---
+if "optimization_history" not in st.session_state:
+    st.session_state.optimization_history = []
+
 # --- Initial Default Data Generator matching Template ---
 TEMPLATE_DATA = [
     {"Troop Name": "Raged Barbarian", "Upgrade Resource": "Builder Elixir", "Eludidator": 1, "Lambent Light": 0, "Night Sky": 1, "Dark Repulser": 0},
@@ -238,43 +242,78 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df
 
-# --- Run Action ---
-if st.button("🚀 Optimize Trades", type="primary"):
-    with st.spinner("Calculating optimal multi-player trade chains..."):
-        sol, recs, players, updated_inventory_df = run_optimization(edited_df)
+# --- Button Actions ---
+col_b1, col_b2 = st.columns([1, 4])
 
-    st.divider()
-    st.header("📊 Results Summary")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Trades Executed", len(sol["trades"]))
-    col2.metric("Missing Cards Gained", sol["missing"])
-    col3.metric("Players Benefited", sol["players"])
+with col_b1:
+    if st.button("🚀 Optimize Initial Trades", type="primary"):
+        st.session_state.optimization_history = []  # Reset history
+        with st.spinner("Calculating initial optimal trade chains..."):
+            sol, recs, players, updated_df = run_optimization(edited_df)
+            st.session_state.optimization_history.append({
+                "stage": 1,
+                "sol": sol,
+                "recs": recs,
+                "players": players,
+                "updated_df": updated_df
+            })
 
-    st.divider()
+# --- Display All Stages sequentially ---
+if len(st.session_state.optimization_history) > 0:
+    for idx, stage_data in enumerate(st.session_state.optimization_history):
+        stage_num = stage_data["stage"]
+        sol = stage_data["sol"]
+        recs = stage_data["recs"]
+        updated_df = stage_data["updated_df"]
 
-    # --- Excel Download Section ---
-    st.subheader("📥 Download Updated Inventory")
-    st.write("Click below to download the updated Excel file reflecting card totals after all trades are executed:")
-    
-    excel_data = to_excel_bytes(updated_inventory_df, sheet_name='Updated_Inventory')
-    st.download_button(
-        label="💾 Download Updated Workbook (.xlsx)",
-        data=excel_data,
-        file_name="Clash_Cards_Updated_Inventory.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        st.divider()
+        st.header(f"📊 Results Stage {stage_num}")
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Trades Executed", len(sol["trades"]))
+        c2.metric("Missing Cards Gained", sol["missing"])
+        c3.metric("Players Benefited", sol["players"])
 
-    st.divider()
+        st.divider()
 
-    if len(sol["trades"]) > 0:
-        st.subheader("📋 Executed Trade Breakdown Table")
-        st.dataframe(pd.DataFrame(sol["trades"]), use_container_width=True)
+        # Excel Download for this stage
+        st.subheader(f"📥 Download Stage {stage_num} Updated Inventory")
+        excel_data = to_excel_bytes(updated_df, sheet_name=f'Stage_{stage_num}_Inventory')
+        st.download_button(
+            label=f"💾 Download Stage {stage_num} Inventory (.xlsx)",
+            data=excel_data,
+            file_name=f"Clash_Cards_Stage_{stage_num}_Inventory.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_btn_{stage_num}"
+        )
 
-    else:
-        st.warning("No legal trades could be made with current card counts.")
+        st.divider()
 
-    if len(recs) > 0:
-        st.subheader("💡 Recommendations to Unlock Trades")
-        st.info("Acquiring +1 duplicate copy of any card below will unlock multi-player trade chains:")
-        st.dataframe(pd.DataFrame(recs)[["Player", "Target Card", "Type", "Cards Gained", "Players Benefited", "Trades Unlocked"]], use_container_width=True)
+        if len(sol["trades"]) > 0:
+            st.subheader(f"📋 Executed Trade Breakdown (Stage {stage_num})")
+            st.dataframe(pd.DataFrame(sol["trades"]), use_container_width=True)
+        else:
+            st.warning(f"No further legal trades could be made in Stage {stage_num}.")
+
+        if len(recs) > 0:
+            st.subheader(f"💡 Recommendations to Unlock Further Trades (Stage {stage_num})")
+            st.info("Acquiring +1 duplicate copy of any card below will unlock multi-player trade chains:")
+            st.dataframe(pd.DataFrame(recs)[["Player", "Target Card", "Type", "Cards Gained", "Players Benefited", "Trades Unlocked"]], use_container_width=True)
+
+        # Show option to run NEXT stage using the updated inventory from THIS stage
+        if idx == len(st.session_state.optimization_history) - 1:
+            st.divider()
+            st.subheader(f"🔄 Next Optimization Stage")
+            st.write(f"Want to perform another optimization round starting with the **Stage {stage_num} updated inventory**?")
+            
+            if st.button(f"⚡ Optimize Stage {stage_num + 1} (Use Stage {stage_num} Updated Inventory)", key=f"next_stage_btn_{stage_num}"):
+                with st.spinner(f"Calculating Stage {stage_num + 1} trades..."):
+                    next_sol, next_recs, next_players, next_updated_df = run_optimization(updated_df)
+                    st.session_state.optimization_history.append({
+                        "stage": stage_num + 1,
+                        "sol": next_sol,
+                        "recs": next_recs,
+                        "players": next_players,
+                        "updated_df": next_updated_df
+                    })
+                    st.rerun()
