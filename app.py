@@ -455,18 +455,25 @@ if st.session_state.active_trade is not None:
                             "Executed By": trade_info['initiated_by']
                         }])
                         
+                        # Fetch current history sheet data
                         try:
                             history_df = conn.read(spreadsheet=target_sheet, worksheet="Trade_History", ttl=0)
                             if history_df is not None and not history_df.empty:
                                 updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
                             else:
                                 updated_history = new_log_row
-                        except Exception:
+                        except Exception as read_err:
+                            # If tab is blank or fresh
                             updated_history = new_log_row
 
+                        # Push updated log back to Trade_History
                         conn.update(spreadsheet=target_sheet, worksheet="Trade_History", data=updated_history)
+                        st.toast("📜 History logged successfully!", icon="📝")
+
                     except Exception as log_err:
-                        st.toast(f"⚠️ Inventory saved, but history log failed: {log_err}", icon="⚠️")
+                        # Display persistent error alert on screen so we can diagnose immediately
+                        st.error(f"⚠️ History logging error: {log_err}")
+                        st.info("💡 Make sure your Google Sheet has a tab named exactly 'Trade_History' with column headers in row 1.")
 
                     # 4. Reset state and re-optimize
                     st.toast("🎉 Trade completed & logged to history!", icon="✅")
