@@ -6,6 +6,10 @@ import io
 import time
 import datetime
 import json
+import socket
+
+# Set global default timeout for all network requests to 5 seconds
+socket.setdefaulttimeout(5)
 
 # --- 1. PAGE SETUP ---
 st.set_page_config(page_title="Clash Trade Optimizer", layout="wide", page_icon="⚔️")
@@ -689,7 +693,6 @@ if st.session_state.active_trade is not None:
         st.rerun()
     else:
         time.sleep(1)
-        st.rerun()
 
 # --- 10. BUTTON ACTIONS ---
 col_b1, col_b2 = st.columns([1, 4])
