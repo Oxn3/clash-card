@@ -278,23 +278,10 @@ if st.sidebar.button("🔒 Logout"):
 st.sidebar.divider()
 
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
-
-# Ratios adjusted: Gives title/spacer enough room while allocating ~0.6 to each button
-# so text stays on 1-2 clean lines instead of squishing into vertical columns.
-col_title, _, col_refresh, col_sheet = st.columns(
-    [2.2, 1.0, 0.65, 0.65], 
-    vertical_alignment="center"
-)
-
-with col_title:
-    st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
-
-with col_sheet:
-    st.link_button(
-        "📄 View Inventory Sheet", 
-        url="https://docs.google.com/spreadsheets/d/1zkL8HCQgX7TgCKd6skLMfOvHkeRQBvwEFGG-IT2M5PE/edit?pli=1&gid=1125446752#gid=1125446752",
-        use_container_width=True
-    )
+col_refresh, _ = st.columns([1, 4])
+with col_refresh:
+    if st.button("🔄 Sync Live Inventory"):
+        st.rerun()
 
 try:
     with st.spinner("Syncing card inventory..."):
@@ -437,7 +424,8 @@ with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
 
 # --- MAIN PAGE CONTINUES ---
 st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
-st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
+# st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
+st.caption("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
 edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
 
 # --- 8. ORIGINAL ALGORITHM ENGINE ---
