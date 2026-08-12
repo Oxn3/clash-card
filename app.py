@@ -279,14 +279,15 @@ st.sidebar.divider()
 
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
 
-# Button column weights set to 0.3 (25% of the original 1.2 width)
+# Ratios adjusted: Gives title/spacer enough room while allocating ~0.6 to each button
+# so text stays on 1-2 clean lines instead of squishing into vertical columns.
 col_title, _, col_refresh, col_sheet = st.columns(
-    [2.5, 2.8, 0.3, 0.3], 
+    [2.2, 1.0, 0.65, 0.65], 
     vertical_alignment="center"
 )
 
 with col_title:
-    st.subheader(f"Live Card Inventory Grid — {st.session_state.clan_tag}")
+    st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
 
 with col_refresh:
     if st.button("🔄 Sync Live Inventory", use_container_width=True):
