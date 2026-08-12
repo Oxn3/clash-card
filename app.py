@@ -415,12 +415,12 @@ with row2_col2:
         help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
     )
 
-st.sidebar.write("")
-st.sidebar.markdown("**📦 Surplus Duplicates Breakdown**")
-st.sidebar.caption("Total extra card copies available for trade across all players:")
-st.sidebar.write(f"💧 **Elixir:** `{dup_elixir}`")
-st.sidebar.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
-st.sidebar.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
+# Collapsible expander open by default
+with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
+    st.caption("Total extra card copies available for trade across all players:")
+    st.write(f"💧 **Elixir:** `{dup_elixir}`")
+    st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
+    st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
 
 # --- MAIN PAGE CONTINUES ---
 st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
