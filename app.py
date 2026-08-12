@@ -278,12 +278,10 @@ if st.sidebar.button("🔒 Logout"):
 st.sidebar.divider()
 
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
+col_refresh, col_sheet = st.columns([1, 1])
 
 # Create a row with Title on the left, Buttons on the right
 col_title, col_refresh, col_sheet = st.columns([3, 1, 1], vertical_alignment="center")
-
-with col_title:
-    st.subheader("Live Card Inventory Grid — #800G09JP")
 
 with col_refresh:
     if st.button("🔄 Sync Live Inventory", use_container_width=True):
