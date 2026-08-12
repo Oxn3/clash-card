@@ -3,6 +3,7 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import io
 import time
+import datetime
 
 # --- 1. PAGE SETUP ---
 st.set_page_config(page_title="Clash Trade Optimizer", layout="wide", page_icon="⚔️")
@@ -381,6 +382,8 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df, card_col
 
+import datetime
+
 # --- 8. TRADE MONITORING & CONFIRMATION ENGINE ---
 if st.session_state.active_trade is not None:
     trade_info = st.session_state.active_trade
@@ -408,9 +411,8 @@ if st.session_state.active_trade is not None:
     
     with btn_col1:
         if st.button("✅ Confirm Trade Success", type="primary", use_container_width=True):
-            with st.spinner("Updating Google Sheet & recalculating trades..."):
+            with st.spinner("Updating Google Sheet & recording history..."):
                 # 1. Update inventory in local dataframe
-                # Initiator gives 'give' (-1) and receives 'rec' (+1)
                 init_give_idx = edited_df[edited_df[card_col] == give].index
                 init_rec_idx = edited_df[edited_df[card_col] == rec].index
                 
@@ -419,27 +421,58 @@ if st.session_state.active_trade is not None:
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, init] = int(edited_df.loc[init_rec_idx, init].values[0]) + 1
 
-                # Partner receives 'give' (+1) and gives 'rec' (-1)
                 if not init_give_idx.empty:
                     edited_df.loc[init_give_idx, part] = int(edited_df.loc[init_give_idx, part].values[0]) + 1
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-                # 2. Write updated dataframe back to Google Sheets
+                # 2. Write updated inventory dataframe back to Google Sheet
+                sheet_updated = False
                 try:
-                    conn.update(spreadsheet=st.session_state.sheet_url, data=edited_df)
-                    st.success("🎉 Inventory updated in Google Sheet!")
+                    conn.update(worksheet="Sheet1", data=edited_df)
+                    st.cache_data.clear()
+                    sheet_updated = True
                 except Exception as e:
-                    st.error(f"⚠️ Failed to update Google Sheet: {e}")
+                    try:
+                        conn.update(data=edited_df)
+                        st.cache_data.clear()
+                        sheet_updated = True
+                    except Exception as err:
+                        st.error(f"❌ Failed to write inventory to Google Sheet: {err}")
 
-                # 3. Reset trade state and re-optimize
-                st.session_state.active_trade = None
-                st.session_state.stage_2_results = None
-                sol, recs, players, updated_df, card_col = run_optimization(edited_df)
-                st.session_state.stage_1_results = {
-                    "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
-                }
-                st.rerun()
+                # 3. Append historical trade log row into 'Trade_History' worksheet
+                if sheet_updated:
+                    try:
+                        new_log_row = pd.DataFrame([{
+                            "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Initiator": init,
+                            "Gave Card": give,
+                            "Received Card": rec,
+                            "Partner": part,
+                            "Executed By": trade_info['initiated_by']
+                        }])
+                        
+                        # Fetch current history to append row
+                        try:
+                            history_df = conn.read(worksheet="Trade_History", ttl=0)
+                            updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
+                        except Exception:
+                            updated_history = new_log_row
+                            
+                        conn.update(worksheet="Trade_History", data=updated_history)
+                    except Exception as log_err:
+                        st.warning(f"⚠️ Inventory updated, but trade history failed to write: {log_err}")
+
+                    # 4. Reset state and re-optimize
+                    st.toast("🎉 Trade completed & logged to history!", icon="✅")
+                    st.session_state.active_trade = None
+                    st.session_state.stage_2_results = None
+                    sol, recs, players, updated_df, card_col = run_optimization(edited_df)
+                    st.session_state.stage_1_results = {
+                        "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
+                    }
+                    time.sleep(1.5)
+                    st.rerun()
 
     with btn_col2:
         if st.button("❌ Cancel Trade", type="secondary", use_container_width=True):
@@ -582,3 +615,23 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
             use_container_width=True,
             hide_index=True
         )
+
+# --- 11. HISTORICAL TRADE LOGS ---
+st.divider()
+with st.expander("📜 View Trade History Log", expanded=False):
+    st.caption("All confirmed trades logged to the Google Sheet `Trade_History` tab:")
+    try:
+        # Read the Trade_History tab without heavy caching so it stays fresh
+        history_data = conn.read(worksheet="Trade_History", ttl=10)
+        
+        if history_data is not None and not history_data.empty:
+            # Display history in reverse chronological order (newest trades first)
+            st.dataframe(
+                history_data.iloc[::-1], 
+                use_container_width=True, 
+                hide_index=True
+            )
+        else:
+            st.info("No trade history recorded yet.")
+    except Exception as e:
+        st.info("No `Trade_History` worksheet found in Google Sheet yet. It will automatically populate once a trade is confirmed!")
