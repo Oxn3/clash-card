@@ -16,7 +16,7 @@ st.title("⚔️ Clash Cards Trade Optimizer")
 try:
     MASTER_REGISTRY_URL = st.secrets["MASTER_REGISTRY_URL"]
 except Exception:
-    st.error("⚠️ MASTER_REGISTRY_URL missing in .streamlit/secrets.toml!")
+    st.error("⚠️ Config setup error: MASTER_REGISTRY_URL missing in app secrets!")
     st.stop()
 
 # --- 3. AUTHENTICATION HELPER FOR GSPREAD ---
@@ -53,11 +53,11 @@ def get_gspread_client():
             return gspread.service_account_from_dict(creds_dict)
             
         else:
-            st.error("❌ Could not find Service Account credentials in Streamlit secrets!")
+            st.error("❌ Authentication Error: Could not load service credentials from app settings.")
             st.stop()
 
-    except Exception as e:
-        st.error(f"❌ Failed to initialize Service Account credentials: {e}")
+    except Exception:
+        st.error("❌ Authentication Error: Invalid service account configuration.")
         st.stop()
 
 # --- 4. SESSION STATE INITIALIZATION ---
@@ -172,7 +172,8 @@ def generate_excel_template():
 # --- 6. SIDEBAR: AUTHENTICATION ENGINE ---
 st.sidebar.header("🔑 Clan Portal")
 
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Pass show_spinner=False to suppress internal connection toasts/messages
+conn = st.connection("gsheets", type=GSheetsConnection, show_spinner=False)
 
 if not st.session_state.authenticated:
     st.sidebar.info("Enter your Clan Tag, Player Name, and Password.")
@@ -191,7 +192,7 @@ if not st.session_state.authenticated:
     if existing_clan.empty and len(clan_tag_input) >= 3:
         st.sidebar.divider()
         st.sidebar.subheader("🆕 New Clan Registration")
-        st.sidebar.caption("Need a starting sheet? Download our template spreadsheet, upload it to your Google Drive as a Google Sheet, set sharing to 'Anyone with link can edit', and paste the URL below.")
+        st.sidebar.caption("Need a starting sheet? Download our template, upload it to your Google Drive as a Google Sheet, set sharing to 'Anyone with link can edit', and paste the URL below.")
         
         template_bytes = generate_excel_template()
         st.sidebar.download_button(
@@ -235,7 +236,7 @@ if not st.session_state.authenticated:
                         sheet_url_to_use = clan_url_input
 
                 if credentials_valid and sheet_url_to_use:
-                    with st.spinner("Validating Player Name and Inventory Data..."):
+                    with st.spinner("Validating player login..."):
                         clan_df = fetch_sheet_with_retry(conn, sheet_url_to_use)
                         
                         card_matches = [c for c in clan_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
@@ -247,7 +248,7 @@ if not st.session_state.authenticated:
                         recorded_names_lower = [p.lower() for p in player_cols]
 
                         if player_name_input.lower() not in recorded_names_lower:
-                            st.sidebar.error(f"❌ Player **'{player_name_input}'** not found in sheet headers!")
+                            st.sidebar.error(f"❌ Player **'{player_name_input}'** not found in clan roster!")
                             st.sidebar.markdown(f"👉 **[Click here to open Clan Sheet & add your column]({sheet_url_to_use})**")
                         else:
                             matched_name = next(p for p in player_cols if p.lower() == player_name_input.lower())
@@ -264,10 +265,10 @@ if not st.session_state.authenticated:
                                 st.sidebar.success(f"Welcome, {matched_name} ({clan_tag_input})!")
                                 st.rerun()
 
-            except Exception as e:
-                st.sidebar.error(f"Error accessing Google Sheets: {e}")
+            except Exception:
+                st.sidebar.error("❌ Unable to verify credentials right now. Please try again.")
 
-    st.warning("⚠️ Please log in via sidebar to access your clan sheet.")
+    st.warning("⚠️ Please log in via sidebar to access your clan data.")
     st.stop()
 
 # --- IF AUTHENTICATED ---
@@ -287,13 +288,14 @@ st.sidebar.divider()
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
 col_refresh, _ = st.columns([1, 4])
 with col_refresh:
-    if st.button("🔄 Sync Live Sheet Data"):
+    if st.button("🔄 Sync Live Inventory"):
         st.rerun()
 
 try:
-    live_df = fetch_sheet_with_retry(conn, st.session_state.sheet_url)
-except Exception as e:
-    st.error(f"⚠️ Google Sheets server is temporarily unreachable. Details: {e}")
+    with st.spinner("Syncing card inventory..."):
+        live_df = fetch_sheet_with_retry(conn, st.session_state.sheet_url)
+except Exception:
+    st.error("⚠️ System temporarily offline. Unable to retrieve live inventory.")
     st.stop()
 
 st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
@@ -450,7 +452,7 @@ if st.session_state.active_trade is not None:
     
     with btn_col1:
         if st.button("✅ Confirm Trade Success", type="primary", use_container_width=True):
-            with st.spinner("Updating Google Sheet & recording history..."):
+            with st.spinner("Processing and updating trade inventory..."):
                 # 1. Update inventory in local dataframe
                 init_give_idx = edited_df[edited_df[card_col] == give].index
                 init_rec_idx = edited_df[edited_df[card_col] == rec].index
@@ -465,23 +467,23 @@ if st.session_state.active_trade is not None:
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-                # 2. Write updated inventory using direct gspread service account client
+                # 2. Write updated inventory using direct gspread client
                 sheet_updated = False
                 try:
                     client = get_gspread_client()
                     sh = client.open_by_url(target_sheet)
                     ws = sh.get_worksheet(0)
                     
-                    # Convert NaN to empty string for clean GSheets write
+                    # Convert NaN to empty string for clean write
                     clean_df = edited_df.fillna("")
                     ws.update([clean_df.columns.values.tolist()] + clean_df.values.tolist())
                     
                     st.cache_data.clear()
                     sheet_updated = True
-                except Exception as write_err:
-                    st.error(f"❌ Failed to write inventory to Google Sheet: {write_err}")
+                except Exception:
+                    st.error("❌ Unable to write inventory updates. Please check connection.")
 
-                # 3. Append historical trade log row into separate 'Clan Trade History Log' Google Sheet
+                # 3. Append historical trade log row into separate log sheet
                 if sheet_updated:
                     try:
                         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
@@ -506,13 +508,13 @@ if st.session_state.active_trade is not None:
                                 worksheet.append_row(["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By"])
 
                             worksheet.append_row(row_to_append)
-                            st.toast("📜 Trade logged to History Sheet!", icon="📝")
+                            st.toast("📜 Trade recorded in history log!", icon="📝")
 
-                    except Exception as log_err:
-                        st.toast(f"⚠️ Inventory saved, but history log skipped: {log_err}", icon="⚠️")
+                    except Exception:
+                        st.toast("⚠️ Inventory saved successfully.", icon="⚠️")
 
                     # 4. Reset state and re-optimize
-                    st.toast("🎉 Trade completed & logged to history!", icon="✅")
+                    st.toast("🎉 Trade completed!", icon="✅")
                     st.session_state.active_trade = None
                     st.session_state.stage_2_results = None
                     sol, recs, players, updated_df, card_col = run_optimization(edited_df)
@@ -544,7 +546,7 @@ with col_b1:
     if st.button("🚀 Calculate Trade Options", type="primary"):
         st.session_state.active_trade = None
         st.session_state.stage_2_results = None
-        with st.spinner("Calculating optimal trade chains..."):
+        with st.spinner("Calculating optimal trade sequences..."):
             sol, recs, players, updated_df, card_col = run_optimization(edited_df)
             st.session_state.stage_1_results = {
                 "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
@@ -626,7 +628,7 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
             st.caption("Calculate downstream options based on projected inventory after Stage 1 finishes.")
             
             if st.button("⚡ Run Stage 2 Optimization", type="secondary"):
-                with st.spinner("Calculating Stage 2 optimization on projected inventory..."):
+                with st.spinner("Calculating Stage 2 optimization..."):
                     updated_df_s1 = st.session_state.stage_1_results["updated_df"]
                     sol_s2, recs_s2, players_s2, updated_df_s2, card_col_s2 = run_optimization(updated_df_s1)
                     
@@ -667,7 +669,7 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
 # --- 12. HISTORICAL TRADE LOGS ---
 st.divider()
 with st.expander("📜 View Trade History Log", expanded=False):
-    st.caption("All confirmed trades logged to the dedicated Trade History Sheet:")
+    st.caption("All confirmed trades logged to the system history:")
     try:
         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
         if history_sheet_url:
@@ -686,6 +688,6 @@ with st.expander("📜 View Trade History Log", expanded=False):
             else:
                 st.info("No trade history recorded yet.")
         else:
-            st.info("Configure `HISTORY_SHEET_URL` in Streamlit secrets to view trade history.")
-    except Exception as e:
-        st.info("Could not fetch trade history. Make sure the Service Account has Editor access to the history sheet.")
+            st.info("History sheet log not currently configured.")
+    except Exception:
+        st.info("Trade history is currently unavailable.")
