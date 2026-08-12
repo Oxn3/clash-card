@@ -385,32 +385,35 @@ for _, row in live_df.iterrows():
 st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
 
-# Side-by-side impact stats with hover tooltips
-sb_col1, sb_col2 = st.sidebar.columns(2)
-sb_col1.metric(
-    "🤝 Trades Done", 
-    total_trades_count,
-    help="Total number of trades executed and confirmed by clan members."
-)
-sb_col2.metric(
-    "🎉 Cards Gained", 
-    cards_gained_count,
-    help="Total number of brand-new (previously unowned) cards unlocked by players through trades."
-)
+# Row 1: Trades Done & Cards Gained
+row1_col1, row1_col2 = st.sidebar.columns(2)
+with row1_col1:
+    st.metric(
+        "🤝 Trades Done", 
+        total_trades_count,
+        help="Total number of trades executed and confirmed by clan members."
+    )
+with row1_col2:
+    st.metric(
+        "🎉 Cards Gained", 
+        cards_gained_count,
+        help="Total number of brand-new (previously unowned) cards unlocked by players through trades."
+    )
 
-# Unique missing cards metric
-st.sidebar.metric(
-    "❌ Unique Missing Cards", 
-    f"{unique_missing_cards} / {total_cards_in_catalog}",
-    help="Number of cards that NO ONE in the clan owns yet (0/60 means every single card in the game is owned by at least one clan member!)."
-)
-
-# NEW: Top Gainer Metric
-st.sidebar.metric(
-    "🏆 Top Card Collector", 
-    f"{top_player_name} ({top_player_count})",
-    help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
-)
+# Row 2: Unique Missing Cards & Top Collector
+row2_col1, row2_col2 = st.sidebar.columns(2)
+with row2_col1:
+    st.metric(
+        "❌ Unique Missing Cards", 
+        f"{unique_missing_cards} / {total_cards_in_catalog}",
+        help="Number of cards that NO ONE in the clan owns yet (0/60 means every single card in the game is owned by at least one clan member!)."
+    )
+with row2_col2:
+    st.metric(
+        "🏆 Top Collector", 
+        f"{top_player_name} ({top_player_count})" if top_player_count > 0 else "N/A",
+        help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
+    )
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
     st.caption("Total extra card copies available for trade across all players:")
