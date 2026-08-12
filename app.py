@@ -35,13 +35,9 @@ def get_gspread_client():
             creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
 
         if creds_dict:
-            # Safely create a copy to avoid altering original secrets dictionary
             clean_creds = dict(creds_dict)
-            
-            # Format private key safely
             if "private_key" in clean_creds:
                 clean_creds["private_key"] = clean_creds["private_key"].replace("\\n", "\n")
-            
             clean_creds["type"] = "service_account"
             return gspread.service_account_from_dict(clean_creds)
         else:
@@ -50,6 +46,20 @@ def get_gspread_client():
 
     except Exception:
         st.error("❌ Authentication Error: Invalid service account configuration.")
+        st.stop()
+
+# --- DIRECT GSPREAD LOADER (Bypasses GSheetsConnection hanging issues) ---
+@st.cache_data(ttl=10)
+def fetch_sheet_direct(url):
+    """Directly fetches sheet data using gspread to prevent GSheetsConnection from hanging."""
+    try:
+        client = get_gspread_client()
+        sh = client.open_by_url(url)
+        ws = sh.get_worksheet(0)
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"⚠️ Error loading sheet: {e}")
         st.stop()
 
 # --- 4. SESSION STATE INITIALIZATION ---
@@ -99,16 +109,6 @@ def validate_player_data(clan_df, player_col):
         return False, f"Found **{len(invalid_rows)} invalid troop count(s)** ({error_details}). All counts must be valid non-negative integers (0 or greater)."
 
     return True, ""
-
-def fetch_sheet_with_retry(connection, url, retries=3, delay=2):
-    for attempt in range(retries):
-        try:
-            return connection.read(spreadsheet=url, ttl=0, show_spinner=False)
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(delay)
-            else:
-                raise e
 
 def generate_excel_template():
     troops = [
@@ -164,9 +164,6 @@ def generate_excel_template():
 # --- 6. SIDEBAR: AUTHENTICATION ENGINE ---
 st.sidebar.header("🔑 Clan Portal")
 
-# Standard connection call
-conn = st.connection("gsheets", type=GSheetsConnection)
-
 if not st.session_state.authenticated:
     st.sidebar.info("Enter your Clan Tag, Player Name, and Password.")
     
@@ -175,7 +172,7 @@ if not st.session_state.authenticated:
     clan_pass_input = st.sidebar.text_input("Password", type="password")
 
     try:
-        registry_df = fetch_sheet_with_retry(conn, MASTER_REGISTRY_URL)
+        registry_df = fetch_sheet_direct(MASTER_REGISTRY_URL)
         existing_clan = registry_df[registry_df["Clan Tag"].astype(str).str.upper() == clan_tag_input]
     except Exception:
         existing_clan = pd.DataFrame()
@@ -229,7 +226,7 @@ if not st.session_state.authenticated:
 
                 if credentials_valid and sheet_url_to_use:
                     with st.spinner("Validating player login..."):
-                        clan_df = fetch_sheet_with_retry(conn, sheet_url_to_use)
+                        clan_df = fetch_sheet_direct(sheet_url_to_use)
                         
                         card_matches = [c for c in clan_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
                         card_col = card_matches[0] if card_matches else clan_df.columns[0]
@@ -280,7 +277,7 @@ st.sidebar.divider()
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
 try:
     with st.spinner("Syncing card inventory..."):
-        live_df = fetch_sheet_with_retry(conn, st.session_state.sheet_url)
+        live_df = fetch_sheet_direct(st.session_state.sheet_url)
 except Exception:
     st.error("⚠️ System temporarily offline. Unable to retrieve live inventory.")
     st.stop()
@@ -294,7 +291,7 @@ type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
-# 1. Total Trades Done, Non-Duplicate Cards Gained & Top Player (from History Sheet)
+# Stats Analytics
 total_trades_count = 0
 cards_gained_count = 0
 player_gains = {}
@@ -319,7 +316,7 @@ try:
             for r in rows:
                 initiator = r[init_idx]
                 partner = r[part_idx]
-                gained_val = 1  # Default fallback
+                gained_val = 1
                 
                 if new_idx != -1 and len(r) > new_idx:
                     try:
@@ -329,16 +326,14 @@ try:
                 
                 cards_gained_count += gained_val
                 
-                # Attribute gains (split/allocate to initiator primarily)
                 if gained_val > 0:
                     player_gains[initiator] = player_gains.get(initiator, 0) + 1
-                    if gained_val == 2:  # Both players got a new card
+                    if gained_val == 2:
                         player_gains[partner] = player_gains.get(partner, 0) + 1
 
 except Exception:
     pass    
 
-# Determine Top Player
 top_player_name = "N/A"
 top_player_count = 0
 
@@ -346,16 +341,13 @@ if player_gains:
     top_player_name = max(player_gains, key=player_gains.get)
     top_player_count = player_gains[top_player_name]
 
-# 2. Total Unique Missing Cards (Cards where EVERY player has 0)
 total_cards_in_catalog = len(live_df)
 unique_missing_cards = 0
 
 for _, row in live_df.iterrows():
-    # Only count as missing if EVERY player in player_cols has 0 (or invalid/empty)
     if all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols):
         unique_missing_cards += 1
 
-# 3. Total Duplicate Cards by Type
 dup_elixir = 0
 dup_dark_elixir = 0
 dup_builder_elixir = 0
@@ -376,41 +368,21 @@ for _, row in live_df.iterrows():
         except ValueError:
             pass
 
-# Render cleanly into the Sidebar
 st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
 
-# Row 1: Trades Done & Cards Gained
 row1_col1, row1_col2 = st.sidebar.columns(2)
 with row1_col1:
-    st.metric(
-        "🤝 Trades Done", 
-        total_trades_count,
-        help="Total number of trades executed and confirmed by clan members."
-    )
+    st.metric("🤝 Trades Done", total_trades_count)
 with row1_col2:
-    st.metric(
-        "🎉 Cards Gained", 
-        cards_gained_count,
-        help="Total number of brand-new (previously unowned) cards unlocked by players through trades."
-    )
+    st.metric("🎉 Cards Gained", cards_gained_count)
 
-# Row 2: Unique Missing Cards & Top Player Metric
 row2_col1, row2_col2 = st.sidebar.columns(2)
 with row2_col1:
-    st.metric(
-        "❌ Unique Missing Cards", 
-        f"{unique_missing_cards} / {total_cards_in_catalog}",
-        help="Number of cards that NO ONE in the clan owns yet (0/60 means every single card in the game is owned by at least one clan member!)."
-    )
+    st.metric("❌ Unique Missing", f"{unique_missing_cards} / {total_cards_in_catalog}")
 with row2_col2:
-    st.metric(
-        f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", 
-        f"{top_player_count}" if top_player_count > 0 else "0",
-        help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
-    )
+    st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
 
-# Collapsible expander open by default
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
     st.caption("Total extra card copies available for trade across all players:")
     st.write(f"💧 **Elixir:** `{dup_elixir}`")
@@ -418,8 +390,6 @@ with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
     st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
 
 # --- MAIN PAGE CONTINUES ---
-
-# Header row with title on the left and single sync button on the right
 col_title, _, col_refresh = st.columns([2.5, 1.0, 0.8], vertical_alignment="center")
 
 with col_title:
@@ -432,21 +402,23 @@ with col_refresh:
 
 st.caption("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
 
-# --- PLAYER FILTER ---
 selected_players = st.multiselect(
     "👥 Filter Included Players:",
     options=player_cols,
-    default=player_cols,
-    help="Deselect players whose records are outdated to exclude them from trade calculations."
+    default=player_cols
 )
 
-# Keep metadata columns (card name, resource type) and only selected player columns
 active_cols = [card_col, type_col] + selected_players
-filtered_df = live_df[active_cols]
+filtered_df = live_df[active_cols].copy()
 
-edited_df = st.data_editor(filtered_df, num_rows="dynamic", use_container_width=True, key="live_editor")
+# --- TABLE 1: CLEAN STANDARD DATA EDITOR ---
+edited_df = st.data_editor(
+    filtered_df, 
+    num_rows="dynamic", 
+    use_container_width=True, 
+    key="live_editor_grid"
+)
 
-# --- GRID ACTION BUTTONS: SAVE EDITS & DIRECT LINK ---
 grid_btn_col1, grid_btn_col2, _ = st.columns([1.5, 1.5, 3])
 
 with grid_btn_col1:
@@ -490,7 +462,7 @@ def run_optimization(data_df):
             "IsSuper": "super" in name.lower()
         }
 
-    all_cards = sorted(list(catalog.keys()))
+    all_cards = list(catalog.keys())
     
     inventory = {}
     for p in player_cols:
@@ -594,7 +566,7 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df, card_col
 
-# --- 9. TRADE MONITORING & CONFIRMATION ENGINE ---
+# --- 9. TRADE MONITORING ENGINE ---
 if st.session_state.active_trade is not None:
     trade_info = st.session_state.active_trade
     elapsed = int(time.time() - trade_info["start_time"])
@@ -626,7 +598,6 @@ if st.session_state.active_trade is not None:
                 init_give_idx = edited_df[edited_df[card_col] == give].index
                 init_rec_idx = edited_df[edited_df[card_col] == rec].index
 
-                # --- CHECK IF GAINED CARDS ARE NEW (NON-DUPLICATES) ---
                 init_had_before = int(edited_df.loc[init_rec_idx, init].values[0]) if not init_rec_idx.empty else 0
                 part_had_before = int(edited_df.loc[init_give_idx, part].values[0]) if not init_give_idx.empty else 0
 
@@ -636,7 +607,6 @@ if st.session_state.active_trade is not None:
                 if part_had_before == 0:
                     new_cards_gained += 1
 
-                # Update local dataframe values
                 if not init_give_idx.empty:
                     edited_df.loc[init_give_idx, init] = max(0, int(edited_df.loc[init_give_idx, init].values[0]) - 1)
                 if not init_rec_idx.empty:
@@ -647,7 +617,6 @@ if st.session_state.active_trade is not None:
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-                # Write updated inventory to Google Sheet
                 sheet_updated = False
                 try:
                     client = get_gspread_client()
@@ -662,7 +631,6 @@ if st.session_state.active_trade is not None:
                 except Exception:
                     st.error("❌ Unable to write inventory updates. Please check connection.")
 
-                # Append to history sheet with non-duplicate card count
                 if sheet_updated:
                     try:
                         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
@@ -676,7 +644,7 @@ if st.session_state.active_trade is not None:
                                 rec,
                                 part,
                                 trade_info['initiated_by'],
-                                new_cards_gained  # Logs 1 or 2 if non-duplicate cards were gained
+                                new_cards_gained
                             ]
 
                             client = get_gspread_client()
@@ -684,7 +652,6 @@ if st.session_state.active_trade is not None:
                             worksheet = sh.get_worksheet(0)
 
                             headers = ["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By", "New Cards Gained"]
-                            
                             existing_rows = worksheet.get_all_values()
                             
                             if not existing_rows:
@@ -697,7 +664,7 @@ if st.session_state.active_trade is not None:
 
                             st.toast("📜 Trade recorded in history log!", icon="📝")
 
-                    except Exception as e:
+                    except Exception:
                         st.toast("⚠️ Inventory saved, but trade log failed.", icon="⚠️")
 
                     st.toast("🎉 Trade completed!", icon="✅")
@@ -737,7 +704,7 @@ with col_b1:
                 "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
             }
 
-# --- 11. DISPLAY TRADE OPTIONS ---
+# --- 11. DISPLAY STAGED TRADE OPTIONS ---
 if st.session_state.stage_1_results is not None and st.session_state.active_trade is None:
     
     def render_trade_table(sol_data, stage_num, can_initiate=True):
@@ -838,20 +805,23 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
             st.write("")
             render_trade_table(st.session_state.stage_2_results, stage_num=2, can_initiate=False)
 
-    # --- UNLOCKABLE RECOMMENDATIONS ---
+    # --- UNLOCKABLE RECOMMENDATIONS TABLE ---
     current_recs = st.session_state.stage_2_results["recs"] if (st.session_state.stage_2_results and len(sol_s1["trades"]) > 0) else st.session_state.stage_1_results["recs"]
     
     if len(current_recs) > 0:
         st.divider()
         st.subheader("💡 Unlockable Trades (Recommendations)")
         st.info("Acquiring +1 duplicate copy of any card below will unlock multi-player trade chains:")
+        
+        recs_df = pd.DataFrame(current_recs)[["Player", "Target Card", "Type", "Cards Gained", "Players Benefited", "Trades Unlocked"]]
+        
         st.dataframe(
-            pd.DataFrame(current_recs)[["Player", "Target Card", "Type", "Cards Gained", "Players Benefited", "Trades Unlocked"]], 
+            recs_df, 
             use_container_width=True,
             hide_index=True
         )
 
-# --- 12. HISTORICAL TRADE LOGS ---
+# --- HISTORICAL TRADE LOGS ---
 st.divider()
 with st.expander("📜 View Trade History Log", expanded=False):
     st.caption("All confirmed trades logged to the system history:")
@@ -865,7 +835,6 @@ with st.expander("📜 View Trade History Log", expanded=False):
             all_vals = worksheet.get_all_values()
             
             if len(all_vals) > 1:
-                # Row 0 is header, remaining are records
                 history_df = pd.DataFrame(all_vals[1:], columns=all_vals[0])
                 st.dataframe(
                     history_df.iloc[::-1], 
