@@ -448,7 +448,7 @@ with grid_btn_col2:
     target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
     st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
 
-# --- 8. ORIGINAL ALGORITHM ENGINE ---
+# --- 8. OPTIMAL ALGORITHM ENGINE (EXHAUSTIVE & FAST) ---
 def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
@@ -468,99 +468,141 @@ def run_optimization(data_df):
 
     all_cards = list(catalog.keys())
     
-    inventory = {}
+    # Load initial inventory state
+    initial_inventory = {}
     for p in player_cols:
-        inventory[p] = {}
+        initial_inventory[p] = {}
         for _, row in data_df.iterrows():
             val = row[p]
             try:
-                inventory[p][str(row[card_col])] = int(val) if pd.notnull(val) else 0
+                initial_inventory[p][str(row[card_col])] = int(val) if pd.notnull(val) else 0
             except:
-                inventory[p][str(row[card_col])] = 0
+                initial_inventory[p][str(row[card_col])] = 0
 
-    initial_missing = {p: sum(1 for c in all_cards if inventory[p][c] == 0) for p in player_cols}
+    initial_missing = {p: sum(1 for c in all_cards if initial_inventory[p][c] == 0) for p in player_cols}
 
-    def copy_state(state):
-        return {p: state[p].copy() for p in state}
+    def state_to_tuple(state):
+        """Converts inventory state to an immutable tuple for fast hashing/memoization."""
+        return tuple(
+            (p, tuple(sorted(state[p].items())))
+            for p in sorted(player_cols)
+        )
 
-    def get_hash(state):
-        return "|".join([f"{p}:" + ",".join(str(state[p][c]) for c in all_cards) for p in sorted(player_cols)])
+    def get_score(curr_state):
+        """Calculates total value score for the solution."""
+        missing_gained = 0
+        need_score = 0
+        benefited_players = set()
 
-    def get_score(orig, curr):
-        missing, need_score, benefited = 0, 0, 0
         for p in player_cols:
             p_benefited = False
             for c in all_cards:
-                if orig[p][c] == 0 and curr[p][c] > 0:
-                    missing += 1
+                if initial_inventory[p][c] == 0 and curr_state[p][c] > 0:
+                    missing_gained += 1
                     p_benefited = True
                     super_bonus = 25 if catalog[c]["IsSuper"] else 0
                     need_score += (100 + (initial_missing[p] * 5) + super_bonus)
-            if p_benefited: benefited += 1
+            if p_benefited:
+                benefited_players.add(p)
+
+        dups = sum(max(0, curr_state[p][c] - 1) for p in player_cols for c in all_cards)
+        total_score = need_score + (len(benefited_players) * 20) + (dups * 5)
         
-        dups = sum(max(0, curr[p][c] - 1) for p in player_cols for c in all_cards)
-        return missing, benefited, (need_score + (benefited * 20) + (dups * 5))
+        return missing_gained, len(benefited_players), total_score
 
     def get_legal_trades(inv):
         trades = []
         for init in player_cols:
             for part in player_cols:
-                if init == part: continue
+                if init == part: 
+                    continue
                 for give in all_cards:
-                    if inv[init][give] < 2: continue
+                    if inv[init][give] < 2: 
+                        continue
                     g_info = catalog[give]
                     for rec in all_cards:
-                        if inv[init][rec] != 0 or inv[part][rec] < 2: continue
+                        if inv[init][rec] != 0 or inv[part][rec] < 2: 
+                            continue
                         r_info = catalog[rec]
                         if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
-                            trades.append({"Initiator": init, "Partner": part, "Give": give, "Receive": rec, "Type": g_info["Type"]})
+                            trades.append({
+                                "Initiator": init, 
+                                "Partner": part, 
+                                "Give": give, 
+                                "Receive": rec, 
+                                "Type": g_info["Type"]
+                            })
         return trades
 
     memo = {}
 
-    def solve(state):
-        h = get_hash(state)
-        if h in memo: return memo[h]
+    def solve(state, depth=0, max_depth=8):
+        """Recursive solver with bounded depth and memoization cache."""
+        state_key = state_to_tuple(state)
+        if state_key in memo:
+            return memo[state_key]
 
-        best_trades = []
-        m, p, best_score = get_score(inventory, state)
-        best_sol = {"trades": best_trades, "state": state, "missing": m, "players": p, "score": best_score}
+        m, p, best_score = get_score(state)
+        best_sol = {
+            "trades": [],
+            "state": state,
+            "missing": m,
+            "players": p,
+            "score": best_score
+        }
+
+        # Stop search branch if depth limit reached
+        if depth >= max_depth:
+            return best_sol
 
         for t in get_legal_trades(state):
-            nxt = copy_state(state)
+            # Create lightweight next state copy
+            nxt = {pl: state[pl].copy() for pl in player_cols}
             nxt[t["Initiator"]][t["Give"]] -= 1
             nxt[t["Partner"]][t["Give"]] += 1
             nxt[t["Partner"]][t["Receive"]] -= 1
             nxt[t["Initiator"]][t["Receive"]] += 1
 
-            fut = solve(nxt)
+            fut = solve(nxt, depth + 1, max_depth)
             cand_trades = [t] + fut["trades"]
-            cm, cp, c_score = get_score(inventory, fut["state"])
             
-            if c_score > best_sol["score"] or (c_score == best_sol["score"] and len(cand_trades) < len(best_sol["trades"])):
-                best_sol = {"trades": cand_trades, "state": fut["state"], "missing": cm, "players": cp, "score": c_score}
+            # Prefer solutions with higher scores, or fewer steps for equal scores
+            if (fut["score"] > best_sol["score"]) or (
+                fut["score"] == best_sol["score"] and len(cand_trades) < len(best_sol["trades"])
+            ):
+                best_sol = {
+                    "trades": cand_trades,
+                    "state": fut["state"],
+                    "missing": fut["missing"],
+                    "players": fut["players"],
+                    "score": fut["score"]
+                }
 
-        memo[h] = best_sol
+        memo[state_key] = best_sol
         return best_sol
 
-    sol = solve(inventory)
+    sol = solve(initial_inventory)
 
+    # Calculate unlockable recommendations (+1 duplicate check)
     recs = []
     if len(sol["trades"]) == 0:
         for p in player_cols:
             for c in all_cards:
                 if sol["state"][p][c] == 1:
-                    test_s = copy_state(sol["state"])
+                    test_s = {pl: sol["state"][pl].copy() for pl in player_cols}
                     test_s[p][c] += 1
                     memo.clear()
-                    sub_sol = solve(test_s)
+                    sub_sol = solve(test_s, depth=0, max_depth=3)
                     if len(sub_sol["trades"]) > 0:
-                        m, pl, sc = get_score(sol["state"], sub_sol["state"])
                         recs.append({
-                            "Player": p, "Target Card": c, "Type": catalog[c]["Type"],
-                            "Cards Gained": m, "Players Benefited": pl, "Trades Unlocked": len(sub_sol["trades"]), "Score": sc
+                            "Player": p, 
+                            "Target Card": c, 
+                            "Type": catalog[c]["Type"],
+                            "Cards Gained": sub_sol["missing"], 
+                            "Players Benefited": sub_sol["players"], 
+                            "Trades Unlocked": len(sub_sol["trades"])
                         })
-        recs = sorted(recs, key=lambda x: x["Score"], reverse=True)
+        recs = sorted(recs, key=lambda x: x["Trades Unlocked"], reverse=True)
 
     updated_df = data_df.copy()
     for p in player_cols:
