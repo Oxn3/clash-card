@@ -164,7 +164,7 @@ def generate_excel_template():
 # --- 6. SIDEBAR: AUTHENTICATION ENGINE ---
 st.sidebar.header("🔑 Clan Portal")
 
-# Standard connection call without invalid keyword arguments
+# Standard connection call
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 if not st.session_state.authenticated:
@@ -355,24 +355,7 @@ sb_col1, sb_col2 = st.sidebar.columns(2)
 sb_col1.metric("🤝 Trades Done", total_trades_count)
 sb_col2.metric("🎉 Cards Gained", cards_gained_count)
 
-# Shows unique missing cards out of total (e.g. 14 / 60)
-st.sidebar.metric("❌ Unique Missing Cards", f"{unique_missing_cards} / {total_cards_in_catalog}")
-
-with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
-    st.write(f"💧 **Elixir:** `{dup_elixir}`")
-    st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
-    st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
-
-# Render cleanly into the Sidebar
-st.sidebar.divider()
-st.sidebar.subheader("📊 Clan Stats")
-
-# Side-by-side impact stats
-sb_col1, sb_col2 = st.sidebar.columns(2)
-sb_col1.metric("🤝 Trades Done", total_trades_count)
-sb_col2.metric("🎉 Cards Gained", cards_gained_count)
-
-# Fix: Use unique_missing_cards variable here
+# Shows unique missing cards out of total
 st.sidebar.metric("❌ Unique Missing Cards", f"{unique_missing_cards} / {total_cards_in_catalog}")
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
@@ -381,10 +364,6 @@ with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
     st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
 
 # --- MAIN PAGE CONTINUES ---
-st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
-st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
-edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
-
 st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
 st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
 edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
