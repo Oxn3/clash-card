@@ -446,6 +446,32 @@ filtered_df = live_df[active_cols]
 
 edited_df = st.data_editor(filtered_df, num_rows="dynamic", use_container_width=True, key="live_editor")
 
+# --- GRID ACTION BUTTONS: SAVE EDITS & DIRECT LINK ---
+grid_btn_col1, grid_btn_col2, _ = st.columns([1.5, 1.5, 3])
+
+with grid_btn_col1:
+    if st.button("💾 Save Manual Edits to Google Sheet", type="secondary", use_container_width=True):
+        try:
+            with st.spinner("Saving edits to Google Sheet..."):
+                client = get_gspread_client()
+                target_sheet = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
+                sh = client.open_by_url(target_sheet)
+                ws = sh.get_worksheet(0)
+                
+                clean_df = edited_df.fillna("")
+                ws.update([clean_df.columns.values.tolist()] + clean_df.values.tolist())
+                
+                st.cache_data.clear()
+                st.success("✅ Inventory sheet successfully updated!")
+                time.sleep(1)
+                st.rerun()
+        except Exception as e:
+            st.error(f"❌ Failed to save updates to Google Sheet: {e}")
+
+with grid_btn_col2:
+    target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
+    st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
+
 # --- 8. ORIGINAL ALGORITHM ENGINE ---
 def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
