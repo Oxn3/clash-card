@@ -103,7 +103,7 @@ def validate_player_data(clan_df, player_col):
 def fetch_sheet_with_retry(connection, url, retries=3, delay=2):
     for attempt in range(retries):
         try:
-            return connection.read(spreadsheet=url, ttl=0)
+            return connection.read(spreadsheet=url, ttl=0, show_spinner=False)
         except Exception as e:
             if attempt < retries - 1:
                 time.sleep(delay)
