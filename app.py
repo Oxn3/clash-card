@@ -440,7 +440,7 @@ if st.session_state.active_trade is not None:
                     except Exception as err:
                         st.error(f"❌ Failed to write inventory to Google Sheet: {err}")
 
-                # 3. Append historical trade log row into 'Trade_History' worksheet
+                # 3. Append historical trade log row into 'Trade_History' worksheet (Safe Fallback)
                 if sheet_updated:
                     try:
                         new_log_row = pd.DataFrame([{
@@ -452,16 +452,20 @@ if st.session_state.active_trade is not None:
                             "Executed By": trade_info['initiated_by']
                         }])
                         
-                        # Fetch current history to append row
                         try:
                             history_df = conn.read(worksheet="Trade_History", ttl=0)
-                            updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
+                            if history_df is not None and not history_df.empty:
+                                updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
+                            else:
+                                updated_history = new_log_row
                         except Exception:
+                            # If reading failed or tab was blank
                             updated_history = new_log_row
-                            
+
                         conn.update(worksheet="Trade_History", data=updated_history)
                     except Exception as log_err:
-                        st.warning(f"⚠️ Inventory updated, but trade history failed to write: {log_err}")
+                        # Log history failure notice without stopping inventory update flow
+                        st.toast(f"⚠️ Inventory saved, but history log failed: {log_err}", icon="⚠️")
 
                     # 4. Reset state and re-optimize
                     st.toast("🎉 Trade completed & logged to history!", icon="✅")
