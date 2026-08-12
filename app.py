@@ -446,31 +446,32 @@ if st.session_state.active_trade is not None:
                 # 3. Append historical trade log row into separate 'Clan Trade History Log' Google Sheet
                 if sheet_updated:
                     try:
-                        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL") or st.session_state.get("sheet_url")
+                        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
                         
-                        new_log_row = pd.DataFrame([{
-                            "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "Initiator": init,
-                            "Gave Card": give,
-                            "Received Card": rec,
-                            "Partner": part,
-                            "Executed By": trade_info['initiated_by']
-                        }])
+                        if history_sheet_url:
+                            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            row_to_append = [
+                                timestamp,
+                                init,
+                                give,
+                                rec,
+                                part,
+                                trade_info['initiated_by']
+                            ]
 
-                        # Read existing history rows
-                        try:
-                            history_df = conn.read(spreadsheet=history_sheet_url, ttl=0)
-                            if history_df is not None and not history_df.empty:
-                                history_df = history_df.dropna(how="all")
-                                updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
-                            else:
-                                updated_history = new_log_row
-                        except Exception:
-                            updated_history = new_log_row
+                            # Use the authenticated gspread client directly from st-gsheets-connection
+                            client = conn._instance
+                            sh = client.open_by_url(history_sheet_url)
+                            worksheet = sh.get_worksheet(0) # First tab of history sheet
 
-                        # Write to the separate history sheet via service account
-                        conn.update(spreadsheet=history_sheet_url, data=updated_history)
-                        st.toast("📜 Trade logged to History Sheet!", icon="📝")
+                            # Check if headers exist; if empty sheet, add headers first
+                            existing_records = worksheet.get_all_values()
+                            if not existing_records:
+                                worksheet.append_row(["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By"])
+
+                            # Append row using Service Account auth
+                            worksheet.append_row(row_to_append)
+                            st.toast("📜 Trade logged to History Sheet!", icon="📝")
 
                     except Exception as log_err:
                         st.toast(f"⚠️ Inventory saved, but history log skipped: {log_err}", icon="⚠️")
@@ -635,10 +636,16 @@ with st.expander("📜 View Trade History Log", expanded=False):
     try:
         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
         if history_sheet_url:
-            history_data = conn.read(spreadsheet=history_sheet_url, ttl=10)
-            if history_data is not None and not history_data.empty:
+            # Use authenticated client to read
+            client = conn._instance
+            sh = client.open_by_url(history_sheet_url)
+            worksheet = sh.get_worksheet(0)
+            data = worksheet.get_all_records()
+            
+            if data:
+                history_df = pd.DataFrame(data)
                 st.dataframe(
-                    history_data.iloc[::-1], 
+                    history_df.iloc[::-1], 
                     use_container_width=True, 
                     hide_index=True
                 )
