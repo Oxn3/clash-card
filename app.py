@@ -415,6 +415,7 @@ with row2_col2:
         help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
     )
 
+# Collapsed by default (expanded=False)
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
     st.caption("Total extra card copies available for trade across all players:")
     st.write(f"💧 **Elixir:** `{dup_elixir}`")
