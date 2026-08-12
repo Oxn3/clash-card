@@ -446,7 +446,7 @@ if st.session_state.active_trade is not None:
                 # 3. Append historical trade log row into separate 'Clan Trade History Log' Google Sheet
                 if sheet_updated:
                     try:
-                        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL") or "YOUR_NEW_SHEET_URL_HERE"
+                        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL") or st.session_state.get("sheet_url")
                         
                         new_log_row = pd.DataFrame([{
                             "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -457,23 +457,23 @@ if st.session_state.active_trade is not None:
                             "Executed By": trade_info['initiated_by']
                         }])
 
-                        # Read existing rows from the separate sheet file
+                        # Read existing history rows
                         try:
                             history_df = conn.read(spreadsheet=history_sheet_url, ttl=0)
                             if history_df is not None and not history_df.empty:
+                                history_df = history_df.dropna(how="all")
                                 updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
                             else:
                                 updated_history = new_log_row
                         except Exception:
                             updated_history = new_log_row
 
-                        # Write to the dedicated history sheet
+                        # Write to the separate history sheet via service account
                         conn.update(spreadsheet=history_sheet_url, data=updated_history)
                         st.toast("📜 Trade logged to History Sheet!", icon="📝")
 
                     except Exception as log_err:
-                        # Log notice without failing the main trade confirmation
-                        st.toast(f"⚠️ Inventory saved, but separate history log skipped: {log_err}", icon="⚠️")
+                        st.toast(f"⚠️ Inventory saved, but history log skipped: {log_err}", icon="⚠️")
 
                     # 4. Reset state and re-optimize
                     st.toast("🎉 Trade completed & logged to history!", icon="✅")
@@ -633,16 +633,18 @@ st.divider()
 with st.expander("📜 View Trade History Log", expanded=False):
     st.caption("All confirmed trades logged to the dedicated Trade History Sheet:")
     try:
-        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL") or "YOUR_NEW_SHEET_URL_HERE"
-        history_data = conn.read(spreadsheet=history_sheet_url, ttl=10)
-        
-        if history_data is not None and not history_data.empty:
-            st.dataframe(
-                history_data.iloc[::-1], 
-                use_container_width=True, 
-                hide_index=True
-            )
+        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
+        if history_sheet_url:
+            history_data = conn.read(spreadsheet=history_sheet_url, ttl=10)
+            if history_data is not None and not history_data.empty:
+                st.dataframe(
+                    history_data.iloc[::-1], 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+            else:
+                st.info("No trade history recorded yet.")
         else:
-            st.info("No trade history recorded yet.")
+            st.info("Configure `HISTORY_SHEET_URL` in Streamlit secrets to view trade history.")
     except Exception as e:
-        st.info("Connect a valid HISTORY_SHEET_URL to view past trade history.")
+        st.info("Could not fetch trade history. Make sure the Service Account has Editor access to the history sheet.")
