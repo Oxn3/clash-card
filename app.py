@@ -299,9 +299,10 @@ type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
-# 1. Total Trades Done & Non-Duplicate Cards Gained (from History Sheet)
+# 1. Total Trades Done, Non-Duplicate Cards Gained & Top Player (from History Sheet)
 total_trades_count = 0
 cards_gained_count = 0
+player_gains = {}
 
 try:
     history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
@@ -316,19 +317,39 @@ try:
             rows = history_vals[1:]
             total_trades_count = len(rows)
             
-            # Check if 'New Cards Gained' column exists in history log
-            if "New Cards Gained" in headers:
-                col_idx = headers.index("New Cards Gained")
-                for r in rows:
+            init_idx = headers.index("Initiator") if "Initiator" in headers else 1
+            part_idx = headers.index("Partner") if "Partner" in headers else 4
+            new_idx = headers.index("New Cards Gained") if "New Cards Gained" in headers else -1
+
+            for r in rows:
+                initiator = r[init_idx]
+                partner = r[part_idx]
+                gained_val = 1  # Default fallback
+                
+                if new_idx != -1 and len(r) > new_idx:
                     try:
-                        cards_gained_count += int(r[col_idx])
-                    except (ValueError, IndexError):
-                        cards_gained_count += 1  # Default fallback if cell missing
-            else:
-                # Fallback for older log formats
-                cards_gained_count = total_trades_count
+                        gained_val = int(r[new_idx])
+                    except ValueError:
+                        pass
+                
+                cards_gained_count += gained_val
+                
+                # Attribute gains (split/allocate to initiator primarily)
+                if gained_val > 0:
+                    player_gains[initiator] = player_gains.get(initiator, 0) + 1
+                    if gained_val == 2:  # Both players got a new card
+                        player_gains[partner] = player_gains.get(partner, 0) + 1
+
 except Exception:
-    pass
+    pass    
+
+# Determine Top Player
+top_player_name = "N/A"
+top_player_count = 0
+
+if player_gains:
+    top_player_name = max(player_gains, key=player_gains.get)
+    top_player_count = player_gains[top_player_name]
 
 # 2. Total Unique Missing Cards (Cards where EVERY player has 0)
 total_cards_in_catalog = len(live_df)
@@ -377,11 +398,18 @@ sb_col2.metric(
     help="Total number of brand-new (previously unowned) cards unlocked by players through trades."
 )
 
-# Unique missing cards metric with clear hover explanation
+# Unique missing cards metric
 st.sidebar.metric(
     "❌ Unique Missing Cards", 
     f"{unique_missing_cards} / {total_cards_in_catalog}",
     help="Number of cards that NO ONE in the clan owns yet (0/60 means every single card in the game is owned by at least one clan member!)."
+)
+
+# NEW: Top Gainer Metric
+st.sidebar.metric(
+    "🏆 Top Card Collector", 
+    f"{top_player_name} ({top_player_count})",
+    help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
 )
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
