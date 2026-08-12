@@ -282,15 +282,19 @@ col_refresh, col_sheet = st.columns([1, 1])
 
 col_refresh, col_sheet, _ = st.columns([1, 1, 2])
 
+# Custom ratio to keep buttons right next to each other
+col_refresh, col_sheet, _ = st.columns([1.2, 1.4, 5])
+
 with col_refresh:
-    if st.button("🔄 Sync Live Inventory"):
+    if st.button("🔄 Sync Live Inventory", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 with col_sheet:
     st.link_button(
         "📄 View Inventory Sheet", 
-        url="https://docs.google.com/spreadsheets/d/1zkL8HCQgX7TgCKd6skLMfOvHkeRQBvwEFGG-IT2M5PE/edit?pli=1&gid=1125446752#gid=1125446752"
+        url="https://docs.google.com/spreadsheets/d/1zkL8HCQgX7TgCKd6skLMfOvHkeRQBvwEFGG-IT2M5PE/edit?pli=1&gid=1125446752#gid=1125446752",
+        use_container_width=True
     )
 
 try:
