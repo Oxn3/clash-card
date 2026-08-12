@@ -330,13 +330,13 @@ try:
 except Exception:
     pass
 
-# 2. Total Unique Missing Cards (Clan-wide, out of 60)
+# 2. Total Unique Missing Cards (Cards where EVERY player has 0)
 total_cards_in_catalog = len(live_df)
 unique_missing_cards = 0
 
 for _, row in live_df.iterrows():
-    # If any player has 0 for this card, count it as a missing unique card
-    if any((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols):
+    # Only count as missing if EVERY player in player_cols has 0 (or invalid/empty)
+    if all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols):
         unique_missing_cards += 1
 
 # 3. Total Duplicate Cards by Type
