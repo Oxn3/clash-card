@@ -299,7 +299,7 @@ type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
-# 1. Total Trades Done & Missing Cards Gained (from History Sheet)
+# 1. Total Trades Done & Non-Duplicate Cards Gained (from History Sheet)
 total_trades_count = 0
 cards_gained_count = 0
 
@@ -310,9 +310,23 @@ try:
         sh = client.open_by_url(history_sheet_url)
         ws = sh.get_worksheet(0)
         history_vals = ws.get_all_values()
+        
         if len(history_vals) > 1:
-            total_trades_count = len(history_vals) - 1
-            cards_gained_count = total_trades_count 
+            headers = history_vals[0]
+            rows = history_vals[1:]
+            total_trades_count = len(rows)
+            
+            # Check if 'New Cards Gained' column exists in history log
+            if "New Cards Gained" in headers:
+                col_idx = headers.index("New Cards Gained")
+                for r in rows:
+                    try:
+                        cards_gained_count += int(r[col_idx])
+                    except (ValueError, IndexError):
+                        cards_gained_count += 1  # Default fallback if cell missing
+            else:
+                # Fallback for older log formats
+                cards_gained_count = total_trades_count
 except Exception:
     pass
 
@@ -519,10 +533,20 @@ if st.session_state.active_trade is not None:
     with btn_col1:
         if st.button("✅ Confirm Trade Success", type="primary", use_container_width=True):
             with st.spinner("Processing and updating trade inventory..."):
-                # 1. Update inventory in local dataframe
                 init_give_idx = edited_df[edited_df[card_col] == give].index
                 init_rec_idx = edited_df[edited_df[card_col] == rec].index
-                
+
+                # --- CHECK IF GAINED CARDS ARE NEW (NON-DUPLICATES) ---
+                init_had_before = int(edited_df.loc[init_rec_idx, init].values[0]) if not init_rec_idx.empty else 0
+                part_had_before = int(edited_df.loc[init_give_idx, part].values[0]) if not init_give_idx.empty else 0
+
+                new_cards_gained = 0
+                if init_had_before == 0:
+                    new_cards_gained += 1
+                if part_had_before == 0:
+                    new_cards_gained += 1
+
+                # Update local dataframe values
                 if not init_give_idx.empty:
                     edited_df.loc[init_give_idx, init] = max(0, int(edited_df.loc[init_give_idx, init].values[0]) - 1)
                 if not init_rec_idx.empty:
@@ -533,14 +557,13 @@ if st.session_state.active_trade is not None:
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-                # 2. Write updated inventory using direct gspread client
+                # Write updated inventory to Google Sheet
                 sheet_updated = False
                 try:
                     client = get_gspread_client()
                     sh = client.open_by_url(target_sheet)
                     ws = sh.get_worksheet(0)
                     
-                    # Convert NaN to empty string for clean write
                     clean_df = edited_df.fillna("")
                     ws.update([clean_df.columns.values.tolist()] + clean_df.values.tolist())
                     
@@ -549,7 +572,7 @@ if st.session_state.active_trade is not None:
                 except Exception:
                     st.error("❌ Unable to write inventory updates. Please check connection.")
 
-                # 3. Append historical trade log row into separate log sheet
+                # Append to history sheet with non-duplicate card count
                 if sheet_updated:
                     try:
                         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
@@ -562,27 +585,24 @@ if st.session_state.active_trade is not None:
                                 give,
                                 rec,
                                 part,
-                                trade_info['initiated_by']
+                                trade_info['initiated_by'],
+                                new_cards_gained  # Logs 1 or 2 if non-duplicate cards were gained
                             ]
 
                             client = get_gspread_client()
                             sh = client.open_by_url(history_sheet_url)
                             worksheet = sh.get_worksheet(0)
 
-                            headers = ["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By"]
+                            headers = ["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By", "New Cards Gained"]
                             
-                            # Check existing values safely
                             existing_rows = worksheet.get_all_values()
                             
                             if not existing_rows:
-                                # Sheet is empty: write headers AND trade row together in one batch
                                 worksheet.append_rows([headers, row_to_append])
                             elif existing_rows[0] != headers:
-                                # If first row isn't headers, set row 1 as headers and append trade
                                 worksheet.insert_row(headers, index=1)
                                 worksheet.append_row(row_to_append)
                             else:
-                                # Normal append for existing sheet
                                 worksheet.append_row(row_to_append)
 
                             st.toast("📜 Trade recorded in history log!", icon="📝")
@@ -590,7 +610,6 @@ if st.session_state.active_trade is not None:
                     except Exception as e:
                         st.toast("⚠️ Inventory saved, but trade log failed.", icon="⚠️")
 
-                    # 4. Reset state and re-optimize
                     st.toast("🎉 Trade completed!", icon="✅")
                     st.session_state.active_trade = None
                     st.session_state.stage_2_results = None
@@ -607,7 +626,6 @@ if st.session_state.active_trade is not None:
             st.session_state.active_trade = None
             st.rerun()
 
-    # Timeout handling (3 mins)
     if time_left <= 0:
         st.warning("⌛ 3-minute confirmation window expired. Trade request ignored.")
         st.session_state.active_trade = None
