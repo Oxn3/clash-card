@@ -278,11 +278,6 @@ if st.sidebar.button("🔒 Logout"):
 st.sidebar.divider()
 
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
-col_refresh, _ = st.columns([1, 4])
-with col_refresh:
-    if st.button("🔄 Sync Live Inventory"):
-        st.rerun()
-
 try:
     with st.spinner("Syncing card inventory..."):
         live_df = fetch_sheet_with_retry(conn, st.session_state.sheet_url)
@@ -423,10 +418,33 @@ with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
     st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
 
 # --- MAIN PAGE CONTINUES ---
-st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
-# st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
+
+# Header row with title on the left and single sync button on the right
+col_title, _, col_refresh = st.columns([2.5, 1.0, 0.8], vertical_alignment="center")
+
+with col_title:
+    st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
+
+with col_refresh:
+    if st.button("🔄 Sync Live Inventory", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
 st.caption("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
-edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
+
+# --- PLAYER FILTER ---
+selected_players = st.multiselect(
+    "👥 Filter Included Players:",
+    options=player_cols,
+    default=player_cols,
+    help="Deselect players whose records are outdated to exclude them from trade calculations."
+)
+
+# Keep metadata columns (card name, resource type) and only selected player columns
+active_cols = [card_col, type_col] + selected_players
+filtered_df = live_df[active_cols]
+
+edited_df = st.data_editor(filtered_df, num_rows="dynamic", use_container_width=True, key="live_editor")
 
 # --- 8. ORIGINAL ALGORITHM ENGINE ---
 def run_optimization(data_df):
