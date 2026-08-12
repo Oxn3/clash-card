@@ -363,7 +363,7 @@ with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
     st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
     st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
 
-# Render cleanly into the Sidebar using 2 columns for impact
+# Render cleanly into the Sidebar
 st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
 
@@ -372,7 +372,8 @@ sb_col1, sb_col2 = st.sidebar.columns(2)
 sb_col1.metric("🤝 Trades Done", total_trades_count)
 sb_col2.metric("🎉 Cards Gained", cards_gained_count)
 
-st.sidebar.metric("❌ Remaining Missing Cards", total_missing_cards)
+# Fix: Use unique_missing_cards variable here
+st.sidebar.metric("❌ Unique Missing Cards", f"{unique_missing_cards} / {total_cards_in_catalog}")
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
     st.write(f"💧 **Elixir:** `{dup_elixir}`")
