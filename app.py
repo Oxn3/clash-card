@@ -183,13 +183,11 @@ if not st.session_state.authenticated:
                     if not clan_url_input or "docs.google.com/spreadsheets" not in clan_url_input:
                         st.sidebar.error("❌ Please provide a valid Google Sheet URL to register a new clan.")
                     else:
-                        new_row = pd.DataFrame([{
-                            "Clan Tag": clan_tag_input,
-                            "Password": clan_pass_input,
-                            "Sheet URL": clan_url_input
-                        }])
-                        updated_registry = pd.concat([registry_df, new_row], ignore_index=True)
-                        conn.update(spreadsheet=MASTER_REGISTRY_URL, data=updated_registry)
+                        # --- FIX 1: Direct gspread append for new Clan Registration ---
+                        client = conn._instance
+                        sh = client.open_by_url(MASTER_REGISTRY_URL)
+                        ws = sh.get_worksheet(0)
+                        ws.append_row([clan_tag_input, clan_pass_input, clan_url_input])
                         
                         credentials_valid = True
                         sheet_url_to_use = clan_url_input
@@ -382,8 +380,6 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df, card_col
 
-import datetime
-
 # --- 8. TRADE MONITORING & CONFIRMATION ENGINE ---
 if st.session_state.active_trade is not None:
     trade_info = st.session_state.active_trade
@@ -397,7 +393,6 @@ if st.session_state.active_trade is not None:
     give = trade["Give"]
     rec = trade["Receive"]
 
-    # Target spreadsheet URL from session_state or secrets
     target_sheet = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
 
     st.divider()
@@ -409,7 +404,6 @@ if st.session_state.active_trade is not None:
     mins, secs = divmod(time_left, 60)
     col_t2.metric("Time Remaining", f"{mins:02d}:{secs:02d}")
 
-    # Action Buttons: Confirm vs Cancel
     btn_col1, btn_col2, _ = st.columns([1.5, 1.5, 3])
     
     with btn_col1:
@@ -429,19 +423,21 @@ if st.session_state.active_trade is not None:
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-                # 2. Write updated inventory dataframe back to Google Sheet
+                # 2. --- FIX 2: Write updated inventory back to Google Sheet via gspread auth ---
                 sheet_updated = False
                 try:
-                    conn.update(spreadsheet=target_sheet, worksheet="Sheet1", data=edited_df)
+                    client = conn._instance
+                    sh = client.open_by_url(target_sheet)
+                    ws = sh.get_worksheet(0)
+                    
+                    # Convert NaN to empty string for clean GSheets write
+                    clean_df = edited_df.fillna("")
+                    ws.update([clean_df.columns.values.tolist()] + clean_df.values.tolist())
+                    
                     st.cache_data.clear()
                     sheet_updated = True
-                except Exception as e:
-                    try:
-                        conn.update(spreadsheet=target_sheet, data=edited_df)
-                        st.cache_data.clear()
-                        sheet_updated = True
-                    except Exception as err:
-                        st.error(f"❌ Failed to write inventory to Google Sheet: {err}")
+                except Exception as write_err:
+                    st.error(f"❌ Failed to write inventory to Google Sheet: {write_err}")
 
                 # 3. Append historical trade log row into separate 'Clan Trade History Log' Google Sheet
                 if sheet_updated:
@@ -459,17 +455,14 @@ if st.session_state.active_trade is not None:
                                 trade_info['initiated_by']
                             ]
 
-                            # Use the authenticated gspread client directly from st-gsheets-connection
                             client = conn._instance
                             sh = client.open_by_url(history_sheet_url)
-                            worksheet = sh.get_worksheet(0) # First tab of history sheet
+                            worksheet = sh.get_worksheet(0)
 
-                            # Check if headers exist; if empty sheet, add headers first
                             existing_records = worksheet.get_all_values()
                             if not existing_records:
                                 worksheet.append_row(["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By"])
 
-                            # Append row using Service Account auth
                             worksheet.append_row(row_to_append)
                             st.toast("📜 Trade logged to History Sheet!", icon="📝")
 
@@ -583,7 +576,7 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
     st.write("")
     render_trade_table(st.session_state.stage_1_results, stage_num=1, can_initiate=True)
 
-    # --- STAGE 2 TRADES (ONLY SHOW IF STAGE 1 HAS TRADES) ---
+    # --- STAGE 2 TRADES ---
     if len(sol_s1["trades"]) > 0:
         st.divider()
         if st.session_state.stage_2_results is None:
@@ -636,7 +629,6 @@ with st.expander("📜 View Trade History Log", expanded=False):
     try:
         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
         if history_sheet_url:
-            # Use authenticated client to read
             client = conn._instance
             sh = client.open_by_url(history_sheet_url)
             worksheet = sh.get_worksheet(0)
