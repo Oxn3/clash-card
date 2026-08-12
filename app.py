@@ -400,7 +400,7 @@ with row1_col2:
         help="Total number of brand-new (previously unowned) cards unlocked by players through trades."
     )
 
-# Row 2: Unique Missing Cards & Top Collector
+# Row 2: Unique Missing Cards & Player (Top Collector)
 row2_col1, row2_col2 = st.sidebar.columns(2)
 with row2_col1:
     st.metric(
@@ -410,7 +410,7 @@ with row2_col1:
     )
 with row2_col2:
     st.metric(
-        "🏆 Top Collector", 
+        "🏆 Player", 
         f"{top_player_name} ({top_player_count})" if top_player_count > 0 else "N/A",
         help="Player who has unlocked the highest number of brand-new (previously unowned) cards through trading!"
     )
