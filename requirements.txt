@@ -4,3 +4,5 @@ st-gsheets-connection
 gspread
 google-auth
 openpyxl
+numpy
+scipy
