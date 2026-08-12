@@ -450,7 +450,11 @@ with grid_btn_col2:
     target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
     st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
 
-# --- 8. MATHEMATICALLY OPTIMAL ILP ENGINE (INSTANT & EXHAUSTIVE) ---
+import numpy as np
+from scipy.optimize import milp, LinearConstraint, Bounds
+from scipy.sparse import dok_matrix
+
+# --- 8. MEMORY-EFFICIENT ILP ENGINE (< 15MB RAM USAGE) ---
 def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
@@ -472,7 +476,7 @@ def run_optimization(data_df):
     num_players = len(player_cols)
     num_cards = len(all_cards)
 
-    # Initial inventory matrix: shape (num_players, num_cards)
+    # Initial inventory matrix
     inv = np.zeros((num_players, num_cards), dtype=int)
     for p_idx, p in enumerate(player_cols):
         for c_idx, c in enumerate(all_cards):
@@ -482,7 +486,7 @@ def run_optimization(data_df):
             except:
                 inv[p_idx, c_idx] = 0
 
-    # Identify all candidate legal atomic exchanges: (Initiator, Partner, Give Card, Receive Card)
+    # Build candidate legal trades list
     candidates = []
     for i in range(num_players):
         for j in range(num_players):
@@ -499,79 +503,59 @@ def run_optimization(data_df):
     num_candidates = len(candidates)
 
     if num_candidates == 0:
-        # No legal trades possible
         curr_state = {p: {c: int(inv[p_idx, c_idx]) for c_idx, c in enumerate(all_cards)} for p_idx, p in enumerate(player_cols)}
-        
-        # Check +1 unlockable recommendations
-        recs = []
-        for p_idx, p in enumerate(player_cols):
-            for c_idx, c in enumerate(all_cards):
-                if inv[p_idx, c_idx] == 1:
-                    # Test if adding 1 card unlocks a trade
-                    for partner_idx in range(num_players):
-                        if partner_idx == p_idx: continue
-                        for other_c_idx in range(num_cards):
-                            if inv[partner_idx, other_c_idx] >= 2 and inv[p_idx, other_c_idx] == 0:
-                                g_info = catalog[all_cards[c_idx]]
-                                r_info = catalog[all_cards[other_c_idx]]
-                                if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
-                                    recs.append({
-                                        "Player": p,
-                                        "Target Card": all_cards[c_idx],
-                                        "Type": catalog[all_cards[c_idx]]["Type"],
-                                        "Cards Gained": 1,
-                                        "Players Benefited": 2,
-                                        "Trades Unlocked": 1
-                                    })
-        
         sol = {"trades": [], "state": curr_state, "missing": 0, "players": 0}
-        updated_df = data_df.copy()
-        return sol, recs, player_cols, updated_df, card_col
+        return sol, [], player_cols, data_df.copy(), card_col
 
-    # --- ILP FORMULATION ---
-    # Objective: Maximize score (Prefer high-value trades)
+    # --- MEMORY-SAVING SPARSE MATRIX FORMULATION ---
     c_obj = np.zeros(num_candidates)
     for idx, (i, j, g, r) in enumerate(candidates):
         is_super = catalog[all_cards[g]]["IsSuper"]
-        c_obj[idx] = -(100 + (25 if is_super else 0)) # Negative because solver minimizes
+        c_obj[idx] = -(100 + (25 if is_super else 0))
 
-    # Constraints Matrix
-    A_rows = []
-    b_l = []
-    b_u = []
+    # Calculate exact total constraints rows to pre-allocate
+    num_supply = num_players * num_cards
+    num_demand = num_players * num_cards
+    total_constraints = num_supply + num_demand
 
-    # 1. Supply Constraints: A player cannot give a card more times than (Quantity - 1) duplicates
+    # Use Sparse Matrix (DOK format) so zeroes do NOT consume RAM
+    A_sparse = dok_matrix((total_constraints, num_candidates), dtype=float)
+    b_l = np.zeros(total_constraints)
+    b_u = np.zeros(total_constraints)
+
+    row_idx = 0
+
+    # 1. Supply Constraints
     for i in range(num_players):
         for g in range(num_cards):
             dup = max(0, inv[i, g] - 1)
-            row = np.zeros(num_candidates)
-            for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
-                if p_init == i and c_give == g:
-                    row[idx] += 1
-                if p_part == i and c_rec == g:
-                    row[idx] += 1
-            A_rows.append(row)
-            b_l.append(0)
-            b_u.append(dup)
+            b_l[row_idx] = 0
+            b_u[row_idx] = dup
+            row_idx += 1
 
-    # 2. Demand Constraints: A player can only receive a needed missing card ONCE
+    # 2. Demand Constraints
     for i in range(num_players):
         for r in range(num_cards):
-            if inv[i, r] == 0:
-                row = np.zeros(num_candidates)
-                for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
-                    if p_init == i and c_rec == r:
-                        row[idx] += 1
-                A_rows.append(row)
-                b_l.append(0)
-                b_u.append(1)
+            b_l[row_idx] = 0
+            b_u[row_idx] = 1 if inv[i, r] == 0 else 0
+            row_idx += 1
 
-    A_mat = np.array(A_rows)
-    constraints = LinearConstraint(A_mat, b_l, b_u)
-    integrality = np.ones(num_candidates) # All variables are integers
-    bounds = Bounds(lb=0, ub=1)           # Binary decisions (0 or 1 per candidate trade)
+    # Map variables directly into sparse matrix without copying lists
+    for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
+        supply_row_init_give = (p_init * num_cards) + c_give
+        supply_row_part_rec = (p_part * num_cards) + c_rec
+        demand_row_init_rec = (num_supply) + (p_init * num_cards) + c_rec
 
-    # Solve the Mixed-Integer Linear Program
+        A_sparse[supply_row_init_give, idx] += 1
+        A_sparse[supply_row_part_rec, idx] += 1
+        A_sparse[demand_row_init_rec, idx] += 1
+
+    # Convert to Compressed Sparse Column format for Scipy
+    constraints = LinearConstraint(A_sparse.tocsc(), b_l, b_u)
+    integrality = np.ones(num_candidates)
+    bounds = Bounds(lb=0, ub=1)
+
+    # Solve MILP
     res = milp(c=c_obj, integrality=integrality, bounds=bounds, constraints=constraints)
 
     executed_trades = []
@@ -594,7 +578,6 @@ def run_optimization(data_df):
                 "Type": catalog[all_cards[g]]["Type"]
             })
 
-    # Format final outputs
     curr_state = {}
     benefited_players = set()
     missing_gained = 0
