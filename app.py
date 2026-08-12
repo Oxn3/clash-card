@@ -285,6 +285,9 @@ col_refresh, col_sheet, _ = st.columns([1, 1, 2])
 # Custom ratio to keep buttons right next to each other
 col_refresh, col_sheet, _ = st.columns([1.2, 1.4, 5])
 
+# Equal ratio for buttons so they match in width, plus a spacer
+col_refresh, col_sheet, _ = st.columns([1, 1, 4])
+
 with col_refresh:
     if st.button("🔄 Sync Live Inventory", use_container_width=True):
         st.cache_data.clear()
