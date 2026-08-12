@@ -381,53 +381,79 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df, card_col
 
-# --- 8. TRADE MONITORING & AUTOMATIC RE-CALCULATION ENGINE ---
+# --- 8. TRADE MONITORING & CONFIRMATION ENGINE ---
 if st.session_state.active_trade is not None:
     trade_info = st.session_state.active_trade
     elapsed = int(time.time() - trade_info["start_time"])
     time_left = max(0, 180 - elapsed)
 
+    trade = trade_info["trade"]
+    card_col = trade_info["card_col"]
+    init = trade["Initiator"]
+    part = trade["Partner"]
+    give = trade["Give"]
+    rec = trade["Receive"]
+
     st.divider()
-    st.info(f"⏳ **Active Trade Verification in Progress...** (Initiated by: **{trade_info['initiated_by']}**)")
+    st.warning(f"⏳ **Active Trade Action Required** (Initiated by: **{trade_info['initiated_by']}**)")
     
     col_t1, col_t2 = st.columns([3, 1])
-    col_t1.markdown(f"**Waiting for in-game trade:** 👤 `{trade_info['trade']['Initiator']}` gives *{trade_info['trade']['Give']}* ➡️ receives *{trade_info['trade']['Receive']}* from 👤 `{trade_info['trade']['Partner']}`")
+    col_t1.markdown(f"**Trade in Progress:** 👤 `{init}` gives **{give}** ➡️ receives **{rec}** from 👤 `{part}`")
     
     mins, secs = divmod(time_left, 60)
     col_t2.metric("Time Remaining", f"{mins:02d}:{secs:02d}")
 
-    card_col = trade_info["card_col"]
-    init = trade_info["trade"]["Initiator"]
-    give = trade_info["trade"]["Give"]
-    rec = trade_info["trade"]["Receive"]
+    # Action Buttons: Confirm vs Cancel
+    btn_col1, btn_col2, _ = st.columns([1.5, 1.5, 3])
+    
+    with btn_col1:
+        if st.button("✅ Confirm Trade Success", type="primary", use_container_width=True):
+            with st.spinner("Updating Google Sheet & recalculating trades..."):
+                # 1. Update inventory in local dataframe
+                # Initiator gives 'give' (-1) and receives 'rec' (+1)
+                init_give_idx = edited_df[edited_df[card_col] == give].index
+                init_rec_idx = edited_df[edited_df[card_col] == rec].index
+                
+                if not init_give_idx.empty:
+                    edited_df.loc[init_give_idx, init] = max(0, int(edited_df.loc[init_give_idx, init].values[0]) - 1)
+                if not init_rec_idx.empty:
+                    edited_df.loc[init_rec_idx, init] = int(edited_df.loc[init_rec_idx, init].values[0]) + 1
 
-    init_give_val = edited_df.loc[edited_df[card_col] == give, init].values[0] if not edited_df.loc[edited_df[card_col] == give, init].empty else 0
-    init_rec_val = edited_df.loc[edited_df[card_col] == rec, init].values[0] if not edited_df.loc[edited_df[card_col] == rec, init].empty else 0
+                # Partner receives 'give' (+1) and gives 'rec' (-1)
+                if not init_give_idx.empty:
+                    edited_df.loc[init_give_idx, part] = int(edited_df.loc[init_give_idx, part].values[0]) + 1
+                if not init_rec_idx.empty:
+                    edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-    trade_detected = (init_give_val < trade_info["initial_give_count"]) or (init_rec_val > trade_info["initial_rec_count"])
+                # 2. Write updated dataframe back to Google Sheets
+                try:
+                    conn.update(spreadsheet=st.session_state.sheet_url, data=edited_df)
+                    st.success("🎉 Inventory updated in Google Sheet!")
+                except Exception as e:
+                    st.error(f"⚠️ Failed to update Google Sheet: {e}")
 
-    if trade_detected:
-        st.success("🎉 Trade detected in Google Sheet! Re-calculating next options...")
+                # 3. Reset trade state and re-optimize
+                st.session_state.active_trade = None
+                st.session_state.stage_2_results = None
+                sol, recs, players, updated_df, card_col = run_optimization(edited_df)
+                st.session_state.stage_1_results = {
+                    "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
+                }
+                st.rerun()
+
+    with btn_col2:
+        if st.button("❌ Cancel Trade", type="secondary", use_container_width=True):
+            st.info("Trade cancelled.")
+            st.session_state.active_trade = None
+            st.rerun()
+
+    # Timeout handling (3 mins)
+    if time_left <= 0:
+        st.warning("⌛ 3-minute confirmation window expired. Trade request ignored.")
         st.session_state.active_trade = None
-        st.session_state.stage_2_results = None
-        sol, recs, players, updated_df, card_col = run_optimization(edited_df)
-        st.session_state.stage_1_results = {
-            "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
-        }
         st.rerun()
-
-    elif time_left <= 0:
-        st.warning("⌛ 3-minute window expired without detected changes in Google Sheet. Recalculating trade options...")
-        st.session_state.active_trade = None
-        st.session_state.stage_2_results = None
-        sol, recs, players, updated_df, card_col = run_optimization(edited_df)
-        st.session_state.stage_1_results = {
-            "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
-        }
-        st.rerun()
-
     else:
-        time.sleep(5)
+        time.sleep(1)
         st.rerun()
 
 # --- 9. BUTTON ACTIONS ---
@@ -488,21 +514,11 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
             with r_col7:
                 if is_first_trade:
                     if st.button("🚀 Initiate", key=f"s{stage_num}_init_btn_{i}", type="primary", use_container_width=True):
-                        init = trade["Initiator"]
-                        give = trade["Give"]
-                        rec = trade["Receive"]
-                        card_col = sol_data["card_col"]
-
-                        init_give_val = edited_df.loc[edited_df[card_col] == give, init].values[0] if not edited_df.loc[edited_df[card_col] == give, init].empty else 0
-                        init_rec_val = edited_df.loc[edited_df[card_col] == rec, init].values[0] if not edited_df.loc[edited_df[card_col] == rec, init].empty else 0
-
                         st.session_state.active_trade = {
                             "trade": trade,
                             "initiated_by": st.session_state.player_name,
                             "start_time": time.time(),
-                            "card_col": card_col,
-                            "initial_give_count": init_give_val,
-                            "initial_rec_count": init_rec_val
+                            "card_col": sol_data["card_col"]
                         }
                         st.rerun()
                 else:
