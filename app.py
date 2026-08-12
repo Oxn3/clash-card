@@ -278,7 +278,6 @@ if st.sidebar.button("🔒 Logout"):
 st.sidebar.divider()
 
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
-col_refresh, col_sheet = st.columns([1, 1])
 
 # Create a row with Title on the left, Buttons on the right
 col_title, col_refresh, col_sheet = st.columns([3, 1, 1], vertical_alignment="center")
