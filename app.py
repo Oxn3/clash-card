@@ -397,6 +397,9 @@ if st.session_state.active_trade is not None:
     give = trade["Give"]
     rec = trade["Receive"]
 
+    # Target spreadsheet URL from session_state or secrets
+    target_sheet = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
+
     st.divider()
     st.warning(f"⏳ **Active Trade Action Required** (Initiated by: **{trade_info['initiated_by']}**)")
     
@@ -429,18 +432,18 @@ if st.session_state.active_trade is not None:
                 # 2. Write updated inventory dataframe back to Google Sheet
                 sheet_updated = False
                 try:
-                    conn.update(worksheet="Sheet1", data=edited_df)
+                    conn.update(spreadsheet=target_sheet, worksheet="Sheet1", data=edited_df)
                     st.cache_data.clear()
                     sheet_updated = True
                 except Exception as e:
                     try:
-                        conn.update(data=edited_df)
+                        conn.update(spreadsheet=target_sheet, data=edited_df)
                         st.cache_data.clear()
                         sheet_updated = True
                     except Exception as err:
                         st.error(f"❌ Failed to write inventory to Google Sheet: {err}")
 
-                # 3. Append historical trade log row into 'Trade_History' worksheet (Safe Fallback)
+                # 3. Append historical trade log row into 'Trade_History' worksheet
                 if sheet_updated:
                     try:
                         new_log_row = pd.DataFrame([{
@@ -453,18 +456,16 @@ if st.session_state.active_trade is not None:
                         }])
                         
                         try:
-                            history_df = conn.read(worksheet="Trade_History", ttl=0)
+                            history_df = conn.read(spreadsheet=target_sheet, worksheet="Trade_History", ttl=0)
                             if history_df is not None and not history_df.empty:
                                 updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
                             else:
                                 updated_history = new_log_row
                         except Exception:
-                            # If reading failed or tab was blank
                             updated_history = new_log_row
 
-                        conn.update(worksheet="Trade_History", data=updated_history)
+                        conn.update(spreadsheet=target_sheet, worksheet="Trade_History", data=updated_history)
                     except Exception as log_err:
-                        # Log history failure notice without stopping inventory update flow
                         st.toast(f"⚠️ Inventory saved, but history log failed: {log_err}", icon="⚠️")
 
                     # 4. Reset state and re-optimize
@@ -625,11 +626,10 @@ st.divider()
 with st.expander("📜 View Trade History Log", expanded=False):
     st.caption("All confirmed trades logged to the Google Sheet `Trade_History` tab:")
     try:
-        # Read the Trade_History tab without heavy caching so it stays fresh
-        history_data = conn.read(worksheet="Trade_History", ttl=10)
+        target_sheet = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
+        history_data = conn.read(spreadsheet=target_sheet, worksheet="Trade_History", ttl=10)
         
         if history_data is not None and not history_data.empty:
-            # Display history in reverse chronological order (newest trades first)
             st.dataframe(
                 history_data.iloc[::-1], 
                 use_container_width=True, 
