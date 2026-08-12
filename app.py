@@ -172,8 +172,8 @@ def generate_excel_template():
 # --- 6. SIDEBAR: AUTHENTICATION ENGINE ---
 st.sidebar.header("🔑 Clan Portal")
 
-# Pass show_spinner=False to suppress internal connection toasts/messages
-conn = st.connection("gsheets", type=GSheetsConnection, show_spinner=False)
+# Standard connection call without invalid keyword arguments
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 if not st.session_state.authenticated:
     st.sidebar.info("Enter your Clan Tag, Player Name, and Password.")
