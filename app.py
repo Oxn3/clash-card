@@ -5,6 +5,7 @@ import gspread
 import io
 import time
 import datetime
+import json
 
 # --- 1. PAGE SETUP ---
 st.set_page_config(page_title="Clash Trade Optimizer", layout="wide", page_icon="⚔️")
@@ -20,19 +21,41 @@ except Exception:
 
 # --- 3. AUTHENTICATION HELPER FOR GSPREAD ---
 def get_gspread_client():
-    """Builds an authenticated gspread client directly from Streamlit secrets."""
+    """Builds an authenticated gspread client safely from Streamlit secrets."""
     try:
-        # 1. Try reading service account dict under connections.gsheets
+        creds_dict = None
+
+        # Scenario 1: Formatted under [connections.gsheets]
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             creds_dict = dict(st.secrets["connections"]["gsheets"])
-            return gspread.service_account_from_dict(creds_dict)
-        # 2. Try root service_account secret key
+
+        # Scenario 2: Formatted under [gsheets] or [service_account]
+        elif "gsheets" in st.secrets:
+            creds_dict = dict(st.secrets["gsheets"])
         elif "service_account" in st.secrets:
             creds_dict = dict(st.secrets["service_account"])
+
+        # Scenario 3: Passed as a raw JSON string
+        elif "GCP_SERVICE_ACCOUNT" in st.secrets:
+            creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
+
+        if creds_dict:
+            # Clean up keys inserted by streamlit-gsheets that gspread doesn't recognize directly
+            creds_dict.pop("type", None) if creds_dict.get("type") == "service_account" else None
+            
+            # Fix private key formatting if newlines were escaped
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            
+            # Re-insert account type required by Google Credentials parser
+            creds_dict["type"] = "service_account"
+            
             return gspread.service_account_from_dict(creds_dict)
-        # 3. Fallback to default gspread service account file finder
+            
         else:
-            return gspread.service_account()
+            st.error("❌ Could not find Service Account credentials in Streamlit secrets!")
+            st.stop()
+
     except Exception as e:
         st.error(f"❌ Failed to initialize Service Account credentials: {e}")
         st.stop()
