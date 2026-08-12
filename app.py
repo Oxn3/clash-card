@@ -285,10 +285,6 @@ col_title, _, col_refresh, col_sheet = st.columns(
     [2.2, 1.0, 0.65, 0.65], 
     vertical_alignment="center"
 )
-
-with col_title:
-    st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
-
 with col_refresh:
     if st.button("🔄 Sync Live Inventory", use_container_width=True):
         st.cache_data.clear()
