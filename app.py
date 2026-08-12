@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
+import gspread
 import io
 import time
 import datetime
@@ -17,7 +18,26 @@ except Exception:
     st.error("⚠️ MASTER_REGISTRY_URL missing in .streamlit/secrets.toml!")
     st.stop()
 
-# --- 3. SESSION STATE INITIALIZATION ---
+# --- 3. AUTHENTICATION HELPER FOR GSPREAD ---
+def get_gspread_client():
+    """Builds an authenticated gspread client directly from Streamlit secrets."""
+    try:
+        # 1. Try reading service account dict under connections.gsheets
+        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+            creds_dict = dict(st.secrets["connections"]["gsheets"])
+            return gspread.service_account_from_dict(creds_dict)
+        # 2. Try root service_account secret key
+        elif "service_account" in st.secrets:
+            creds_dict = dict(st.secrets["service_account"])
+            return gspread.service_account_from_dict(creds_dict)
+        # 3. Fallback to default gspread service account file finder
+        else:
+            return gspread.service_account()
+    except Exception as e:
+        st.error(f"❌ Failed to initialize Service Account credentials: {e}")
+        st.stop()
+
+# --- 4. SESSION STATE INITIALIZATION ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "player_name" not in st.session_state:
@@ -29,7 +49,7 @@ if "stage_2_results" not in st.session_state:
 if "active_trade" not in st.session_state:
     st.session_state.active_trade = None
 
-# --- 4. HELPER FUNCTIONS ---
+# --- 5. HELPER FUNCTIONS ---
 def validate_inputs(tag, p_name, pwd):
     if not tag.startswith("#") or len(tag) < 3:
         return False, "Clan Tag must start with '#' and be at least 3 characters."
@@ -126,7 +146,7 @@ def generate_excel_template():
     
     return output.getvalue()
 
-# --- 5. SIDEBAR: AUTHENTICATION ENGINE ---
+# --- 6. SIDEBAR: AUTHENTICATION ENGINE ---
 st.sidebar.header("🔑 Clan Portal")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -183,8 +203,7 @@ if not st.session_state.authenticated:
                     if not clan_url_input or "docs.google.com/spreadsheets" not in clan_url_input:
                         st.sidebar.error("❌ Please provide a valid Google Sheet URL to register a new clan.")
                     else:
-                        # --- FIX 1: Direct gspread append for new Clan Registration ---
-                        client = conn._instance
+                        client = get_gspread_client()
                         sh = client.open_by_url(MASTER_REGISTRY_URL)
                         ws = sh.get_worksheet(0)
                         ws.append_row([clan_tag_input, clan_pass_input, clan_url_input])
@@ -242,7 +261,7 @@ if st.sidebar.button("🔒 Logout"):
 
 st.sidebar.divider()
 
-# --- 6. SAFE REFRESH & LIVE DATA LOAD ---
+# --- 7. SAFE REFRESH & LIVE DATA LOAD ---
 col_refresh, _ = st.columns([1, 4])
 with col_refresh:
     if st.button("🔄 Sync Live Sheet Data"):
@@ -258,7 +277,7 @@ st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
 st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
 edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
 
-# --- 7. ORIGINAL ALGORITHM ENGINE ---
+# --- 8. ORIGINAL ALGORITHM ENGINE ---
 def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
@@ -380,7 +399,7 @@ def run_optimization(data_df):
 
     return sol, recs, player_cols, updated_df, card_col
 
-# --- 8. TRADE MONITORING & CONFIRMATION ENGINE ---
+# --- 9. TRADE MONITORING & CONFIRMATION ENGINE ---
 if st.session_state.active_trade is not None:
     trade_info = st.session_state.active_trade
     elapsed = int(time.time() - trade_info["start_time"])
@@ -423,10 +442,10 @@ if st.session_state.active_trade is not None:
                 if not init_rec_idx.empty:
                     edited_df.loc[init_rec_idx, part] = max(0, int(edited_df.loc[init_rec_idx, part].values[0]) - 1)
 
-                # 2. --- FIX 2: Write updated inventory back to Google Sheet via gspread auth ---
+                # 2. Write updated inventory using direct gspread service account client
                 sheet_updated = False
                 try:
-                    client = conn._instance
+                    client = get_gspread_client()
                     sh = client.open_by_url(target_sheet)
                     ws = sh.get_worksheet(0)
                     
@@ -455,7 +474,7 @@ if st.session_state.active_trade is not None:
                                 trade_info['initiated_by']
                             ]
 
-                            client = conn._instance
+                            client = get_gspread_client()
                             sh = client.open_by_url(history_sheet_url)
                             worksheet = sh.get_worksheet(0)
 
@@ -495,7 +514,7 @@ if st.session_state.active_trade is not None:
         time.sleep(1)
         st.rerun()
 
-# --- 9. BUTTON ACTIONS ---
+# --- 10. BUTTON ACTIONS ---
 col_b1, col_b2 = st.columns([1, 4])
 
 with col_b1:
@@ -508,7 +527,7 @@ with col_b1:
                 "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
             }
 
-# --- 10. DISPLAY TRADE OPTIONS ---
+# --- 11. DISPLAY TRADE OPTIONS ---
 if st.session_state.stage_1_results is not None and st.session_state.active_trade is None:
     
     def render_trade_table(sol_data, stage_num, can_initiate=True):
@@ -622,14 +641,14 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
             hide_index=True
         )
 
-# --- 11. HISTORICAL TRADE LOGS ---
+# --- 12. HISTORICAL TRADE LOGS ---
 st.divider()
 with st.expander("📜 View Trade History Log", expanded=False):
     st.caption("All confirmed trades logged to the dedicated Trade History Sheet:")
     try:
         history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
         if history_sheet_url:
-            client = conn._instance
+            client = get_gspread_client()
             sh = client.open_by_url(history_sheet_url)
             worksheet = sh.get_worksheet(0)
             data = worksheet.get_all_records()
