@@ -7,6 +7,8 @@ import time
 import datetime
 import json
 import socket
+import numpy as np
+from scipy.optimize import milp, LinearConstraint, Bounds
 
 # Set global default timeout for all network requests to 5 seconds
 socket.setdefaulttimeout(5)
@@ -448,7 +450,7 @@ with grid_btn_col2:
     target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
     st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
 
-# --- 8. OPTIMAL ALGORITHM ENGINE (EXHAUSTIVE & FAST) ---
+# --- 8. MATHEMATICALLY OPTIMAL ILP ENGINE (INSTANT & EXHAUSTIVE) ---
 def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
@@ -467,150 +469,159 @@ def run_optimization(data_df):
         }
 
     all_cards = list(catalog.keys())
-    
-    # Load initial inventory state
-    initial_inventory = {}
-    for p in player_cols:
-        initial_inventory[p] = {}
-        for _, row in data_df.iterrows():
-            val = row[p]
+    num_players = len(player_cols)
+    num_cards = len(all_cards)
+
+    # Initial inventory matrix: shape (num_players, num_cards)
+    inv = np.zeros((num_players, num_cards), dtype=int)
+    for p_idx, p in enumerate(player_cols):
+        for c_idx, c in enumerate(all_cards):
+            val = data_df.loc[data_df[card_col] == c, p].values
             try:
-                initial_inventory[p][str(row[card_col])] = int(val) if pd.notnull(val) else 0
+                inv[p_idx, c_idx] = int(val[0]) if len(val) > 0 and pd.notnull(val[0]) else 0
             except:
-                initial_inventory[p][str(row[card_col])] = 0
+                inv[p_idx, c_idx] = 0
 
-    initial_missing = {p: sum(1 for c in all_cards if initial_inventory[p][c] == 0) for p in player_cols}
+    # Identify all candidate legal atomic exchanges: (Initiator, Partner, Give Card, Receive Card)
+    candidates = []
+    for i in range(num_players):
+        for j in range(num_players):
+            if i == j: continue
+            for g in range(num_cards):
+                if inv[i, g] < 2: continue
+                g_info = catalog[all_cards[g]]
+                for r in range(num_cards):
+                    if inv[i, r] != 0 or inv[j, r] < 2: continue
+                    r_info = catalog[all_cards[r]]
+                    if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
+                        candidates.append((i, j, g, r))
 
-    def state_to_tuple(state):
-        """Converts inventory state to an immutable tuple for fast hashing/memoization."""
-        return tuple(
-            (p, tuple(sorted(state[p].items())))
-            for p in sorted(player_cols)
-        )
+    num_candidates = len(candidates)
 
-    def get_score(curr_state):
-        """Calculates total value score for the solution."""
-        missing_gained = 0
-        need_score = 0
-        benefited_players = set()
+    if num_candidates == 0:
+        # No legal trades possible
+        curr_state = {p: {c: int(inv[p_idx, c_idx]) for c_idx, c in enumerate(all_cards)} for p_idx, p in enumerate(player_cols)}
+        
+        # Check +1 unlockable recommendations
+        recs = []
+        for p_idx, p in enumerate(player_cols):
+            for c_idx, c in enumerate(all_cards):
+                if inv[p_idx, c_idx] == 1:
+                    # Test if adding 1 card unlocks a trade
+                    for partner_idx in range(num_players):
+                        if partner_idx == p_idx: continue
+                        for other_c_idx in range(num_cards):
+                            if inv[partner_idx, other_c_idx] >= 2 and inv[p_idx, other_c_idx] == 0:
+                                g_info = catalog[all_cards[c_idx]]
+                                r_info = catalog[all_cards[other_c_idx]]
+                                if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
+                                    recs.append({
+                                        "Player": p,
+                                        "Target Card": all_cards[c_idx],
+                                        "Type": catalog[all_cards[c_idx]]["Type"],
+                                        "Cards Gained": 1,
+                                        "Players Benefited": 2,
+                                        "Trades Unlocked": 1
+                                    })
+        
+        sol = {"trades": [], "state": curr_state, "missing": 0, "players": 0}
+        updated_df = data_df.copy()
+        return sol, recs, player_cols, updated_df, card_col
 
-        for p in player_cols:
-            p_benefited = False
-            for c in all_cards:
-                if initial_inventory[p][c] == 0 and curr_state[p][c] > 0:
-                    missing_gained += 1
-                    p_benefited = True
-                    super_bonus = 25 if catalog[c]["IsSuper"] else 0
-                    need_score += (100 + (initial_missing[p] * 5) + super_bonus)
-            if p_benefited:
+    # --- ILP FORMULATION ---
+    # Objective: Maximize score (Prefer high-value trades)
+    c_obj = np.zeros(num_candidates)
+    for idx, (i, j, g, r) in enumerate(candidates):
+        is_super = catalog[all_cards[g]]["IsSuper"]
+        c_obj[idx] = -(100 + (25 if is_super else 0)) # Negative because solver minimizes
+
+    # Constraints Matrix
+    A_rows = []
+    b_l = []
+    b_u = []
+
+    # 1. Supply Constraints: A player cannot give a card more times than (Quantity - 1) duplicates
+    for i in range(num_players):
+        for g in range(num_cards):
+            dup = max(0, inv[i, g] - 1)
+            row = np.zeros(num_candidates)
+            for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
+                if p_init == i and c_give == g:
+                    row[idx] += 1
+                if p_part == i and c_rec == g:
+                    row[idx] += 1
+            A_rows.append(row)
+            b_l.append(0)
+            b_u.append(dup)
+
+    # 2. Demand Constraints: A player can only receive a needed missing card ONCE
+    for i in range(num_players):
+        for r in range(num_cards):
+            if inv[i, r] == 0:
+                row = np.zeros(num_candidates)
+                for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
+                    if p_init == i and c_rec == r:
+                        row[idx] += 1
+                A_rows.append(row)
+                b_l.append(0)
+                b_u.append(1)
+
+    A_mat = np.array(A_rows)
+    constraints = LinearConstraint(A_mat, b_l, b_u)
+    integrality = np.ones(num_candidates) # All variables are integers
+    bounds = Bounds(lb=0, ub=1)           # Binary decisions (0 or 1 per candidate trade)
+
+    # Solve the Mixed-Integer Linear Program
+    res = milp(c=c_obj, integrality=integrality, bounds=bounds, constraints=constraints)
+
+    executed_trades = []
+    curr_state_mat = inv.copy()
+
+    if res.success and res.x is not None:
+        chosen_indices = np.where(res.x > 0.5)[0]
+        for idx in chosen_indices:
+            i, j, g, r = candidates[idx]
+            curr_state_mat[i, g] -= 1
+            curr_state_mat[j, g] += 1
+            curr_state_mat[j, r] -= 1
+            curr_state_mat[i, r] += 1
+
+            executed_trades.append({
+                "Initiator": player_cols[i],
+                "Partner": player_cols[j],
+                "Give": all_cards[g],
+                "Receive": all_cards[r],
+                "Type": catalog[all_cards[g]]["Type"]
+            })
+
+    # Format final outputs
+    curr_state = {}
+    benefited_players = set()
+    missing_gained = 0
+
+    for p_idx, p in enumerate(player_cols):
+        curr_state[p] = {}
+        for c_idx, c in enumerate(all_cards):
+            final_val = int(curr_state_mat[p_idx, c_idx])
+            curr_state[p][c] = final_val
+            if inv[p_idx, c_idx] == 0 and final_val > 0:
+                missing_gained += 1
                 benefited_players.add(p)
 
-        dups = sum(max(0, curr_state[p][c] - 1) for p in player_cols for c in all_cards)
-        total_score = need_score + (len(benefited_players) * 20) + (dups * 5)
-        
-        return missing_gained, len(benefited_players), total_score
-
-    def get_legal_trades(inv):
-        trades = []
-        for init in player_cols:
-            for part in player_cols:
-                if init == part: 
-                    continue
-                for give in all_cards:
-                    if inv[init][give] < 2: 
-                        continue
-                    g_info = catalog[give]
-                    for rec in all_cards:
-                        if inv[init][rec] != 0 or inv[part][rec] < 2: 
-                            continue
-                        r_info = catalog[rec]
-                        if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
-                            trades.append({
-                                "Initiator": init, 
-                                "Partner": part, 
-                                "Give": give, 
-                                "Receive": rec, 
-                                "Type": g_info["Type"]
-                            })
-        return trades
-
-    memo = {}
-
-    def solve(state, depth=0, max_depth=8):
-        """Recursive solver with bounded depth and memoization cache."""
-        state_key = state_to_tuple(state)
-        if state_key in memo:
-            return memo[state_key]
-
-        m, p, best_score = get_score(state)
-        best_sol = {
-            "trades": [],
-            "state": state,
-            "missing": m,
-            "players": p,
-            "score": best_score
-        }
-
-        # Stop search branch if depth limit reached
-        if depth >= max_depth:
-            return best_sol
-
-        for t in get_legal_trades(state):
-            # Create lightweight next state copy
-            nxt = {pl: state[pl].copy() for pl in player_cols}
-            nxt[t["Initiator"]][t["Give"]] -= 1
-            nxt[t["Partner"]][t["Give"]] += 1
-            nxt[t["Partner"]][t["Receive"]] -= 1
-            nxt[t["Initiator"]][t["Receive"]] += 1
-
-            fut = solve(nxt, depth + 1, max_depth)
-            cand_trades = [t] + fut["trades"]
-            
-            # Prefer solutions with higher scores, or fewer steps for equal scores
-            if (fut["score"] > best_sol["score"]) or (
-                fut["score"] == best_sol["score"] and len(cand_trades) < len(best_sol["trades"])
-            ):
-                best_sol = {
-                    "trades": cand_trades,
-                    "state": fut["state"],
-                    "missing": fut["missing"],
-                    "players": fut["players"],
-                    "score": fut["score"]
-                }
-
-        memo[state_key] = best_sol
-        return best_sol
-
-    sol = solve(initial_inventory)
-
-    # Calculate unlockable recommendations (+1 duplicate check)
-    recs = []
-    if len(sol["trades"]) == 0:
-        for p in player_cols:
-            for c in all_cards:
-                if sol["state"][p][c] == 1:
-                    test_s = {pl: sol["state"][pl].copy() for pl in player_cols}
-                    test_s[p][c] += 1
-                    memo.clear()
-                    sub_sol = solve(test_s, depth=0, max_depth=3)
-                    if len(sub_sol["trades"]) > 0:
-                        recs.append({
-                            "Player": p, 
-                            "Target Card": c, 
-                            "Type": catalog[c]["Type"],
-                            "Cards Gained": sub_sol["missing"], 
-                            "Players Benefited": sub_sol["players"], 
-                            "Trades Unlocked": len(sub_sol["trades"])
-                        })
-        recs = sorted(recs, key=lambda x: x["Trades Unlocked"], reverse=True)
+    sol = {
+        "trades": executed_trades,
+        "state": curr_state,
+        "missing": missing_gained,
+        "players": len(benefited_players)
+    }
 
     updated_df = data_df.copy()
     for p in player_cols:
         for idx, row in updated_df.iterrows():
             card_name = str(row[card_col])
-            updated_df.at[idx, p] = sol["state"][p].get(card_name, row[p])
+            updated_df.at[idx, p] = curr_state[p].get(card_name, row[p])
 
-    return sol, recs, player_cols, updated_df, card_col
+    return sol, [], player_cols, updated_df, card_col
 
 # --- 9. TRADE MONITORING ENGINE ---
 if st.session_state.active_trade is not None:
