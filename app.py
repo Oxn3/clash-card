@@ -364,15 +364,28 @@ for _, row in live_df.iterrows():
 st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
 
-# Side-by-side impact stats
+# Side-by-side impact stats with hover tooltips
 sb_col1, sb_col2 = st.sidebar.columns(2)
-sb_col1.metric("🤝 Trades Done", total_trades_count)
-sb_col2.metric("🎉 Cards Gained", cards_gained_count)
+sb_col1.metric(
+    "🤝 Trades Done", 
+    total_trades_count,
+    help="Total number of trades executed and confirmed by clan members."
+)
+sb_col2.metric(
+    "🎉 Cards Gained", 
+    cards_gained_count,
+    help="Total number of brand-new (previously unowned) cards unlocked by players through trades."
+)
 
-# Shows unique missing cards out of total
-st.sidebar.metric("❌ Unique Missing Cards", f"{unique_missing_cards} / {total_cards_in_catalog}")
+# Unique missing cards metric with clear hover explanation
+st.sidebar.metric(
+    "❌ Unique Missing Cards", 
+    f"{unique_missing_cards} / {total_cards_in_catalog}",
+    help="Number of cards that NO ONE in the clan owns yet (0/60 means every single card in the game is owned by at least one clan member!)."
+)
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
+    st.caption("Total extra card copies available for trade across all players:")
     st.write(f"💧 **Elixir:** `{dup_elixir}`")
     st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
     st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
