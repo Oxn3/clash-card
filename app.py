@@ -280,16 +280,17 @@ st.sidebar.divider()
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
 col_refresh, col_sheet = st.columns([1, 1])
 
+col_refresh, col_sheet, _ = st.columns([1, 1, 2])
+
 with col_refresh:
-    if st.button("🔄 Sync Live Inventory", use_container_width=True):
+    if st.button("🔄 Sync Live Inventory"):
         st.cache_data.clear()
         st.rerun()
 
 with col_sheet:
     st.link_button(
         "📄 View Inventory Sheet", 
-        url="https://docs.google.com/spreadsheets/d/1zkL8HCQgX7TgCKd6skLMfOvHkeRQBvwEFGG-IT2M5PE/edit?pli=1&gid=1125446752#gid=1125446752", 
-        use_container_width=True
+        url="https://docs.google.com/spreadsheets/d/1zkL8HCQgX7TgCKd6skLMfOvHkeRQBvwEFGG-IT2M5PE/edit?pli=1&gid=1125446752#gid=1125446752"
     )
 
 try:
