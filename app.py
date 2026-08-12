@@ -280,19 +280,8 @@ st.sidebar.divider()
 # --- 7. SAFE REFRESH & LIVE DATA LOAD ---
 col_refresh, col_sheet = st.columns([1, 1])
 
-col_refresh, col_sheet, _ = st.columns([1, 1, 2])
-
-# Custom ratio to keep buttons right next to each other
-col_refresh, col_sheet, _ = st.columns([1.2, 1.4, 5])
-
-# Equal ratio for buttons so they match in width, plus a spacer
-col_refresh, col_sheet, _ = st.columns([1, 1, 4])
-
-# [Title: flex] | [Spacer: flex] | [Btn 1: fixed] | [Btn 2: fixed]
-col_title, _, col_refresh, col_sheet = st.columns(
-    [2.5, 1, 1.2, 1.2], 
-    vertical_alignment="center"
-)
+# Create a row with Title on the left, Buttons on the right
+col_title, col_refresh, col_sheet = st.columns([3, 1, 1], vertical_alignment="center")
 
 with col_title:
     st.subheader("Live Card Inventory Grid — #800G09JP")
