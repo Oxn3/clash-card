@@ -1,8 +1,6 @@
 streamlit
 pandas
-st-gsheets-connection
-gspread
-google-auth
-openpyxl
 numpy
 scipy
+gspread
+google-auth
