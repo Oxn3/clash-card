@@ -299,8 +299,10 @@ type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
-# 1. Total Trades Done (from History Sheet)
+# 1. Total Trades Done & Missing Cards Gained (from History Sheet)
 total_trades_count = 0
+cards_gained_count = 0
+
 try:
     history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
     if history_sheet_url:
@@ -310,13 +312,18 @@ try:
         history_vals = ws.get_all_values()
         if len(history_vals) > 1:
             total_trades_count = len(history_vals) - 1
+            cards_gained_count = total_trades_count 
 except Exception:
     pass
 
-# 2. Total Unique Missing Cards
-total_missing_cards = 0
-for p in player_cols:
-    total_missing_cards += (pd.to_numeric(live_df[p], errors='coerce').fillna(0) == 0).sum()
+# 2. Total Unique Missing Cards (Clan-wide, out of 60)
+total_cards_in_catalog = len(live_df)
+unique_missing_cards = 0
+
+for _, row in live_df.iterrows():
+    # If any player has 0 for this card, count it as a missing unique card
+    if any((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols):
+        unique_missing_cards += 1
 
 # 3. Total Duplicate Cards by Type
 dup_elixir = 0
@@ -339,11 +346,33 @@ for _, row in live_df.iterrows():
         except ValueError:
             pass
 
-# Render directly into the Sidebar
+# Render cleanly into the Sidebar
 st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
-st.sidebar.metric("🤝 Total Trades Done", total_trades_count)
-st.sidebar.metric("❌ Total Missing Cards", total_missing_cards)
+
+# Side-by-side impact stats
+sb_col1, sb_col2 = st.sidebar.columns(2)
+sb_col1.metric("🤝 Trades Done", total_trades_count)
+sb_col2.metric("🎉 Cards Gained", cards_gained_count)
+
+# Shows unique missing cards out of total (e.g. 14 / 60)
+st.sidebar.metric("❌ Unique Missing Cards", f"{unique_missing_cards} / {total_cards_in_catalog}")
+
+with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
+    st.write(f"💧 **Elixir:** `{dup_elixir}`")
+    st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
+    st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
+
+# Render cleanly into the Sidebar using 2 columns for impact
+st.sidebar.divider()
+st.sidebar.subheader("📊 Clan Stats")
+
+# Side-by-side impact stats
+sb_col1, sb_col2 = st.sidebar.columns(2)
+sb_col1.metric("🤝 Trades Done", total_trades_count)
+sb_col2.metric("🎉 Cards Gained", cards_gained_count)
+
+st.sidebar.metric("❌ Remaining Missing Cards", total_missing_cards)
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
     st.write(f"💧 **Elixir:** `{dup_elixir}`")
