@@ -290,6 +290,71 @@ except Exception:
     st.error("⚠️ System temporarily offline. Unable to retrieve live inventory.")
     st.stop()
 
+# --- SIDEBAR ANALYTICAL DASHBOARD ---
+card_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
+card_col = card_matches[0] if card_matches else live_df.columns[0]
+
+type_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["type", "resource"])]
+type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_df.columns) > 1 else live_df.columns[0])
+
+player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
+
+# 1. Total Trades Done (from History Sheet)
+total_trades_count = 0
+try:
+    history_sheet_url = st.secrets.get("HISTORY_SHEET_URL")
+    if history_sheet_url:
+        client = get_gspread_client()
+        sh = client.open_by_url(history_sheet_url)
+        ws = sh.get_worksheet(0)
+        history_vals = ws.get_all_values()
+        if len(history_vals) > 1:
+            total_trades_count = len(history_vals) - 1
+except Exception:
+    pass
+
+# 2. Total Unique Missing Cards
+total_missing_cards = 0
+for p in player_cols:
+    total_missing_cards += (pd.to_numeric(live_df[p], errors='coerce').fillna(0) == 0).sum()
+
+# 3. Total Duplicate Cards by Type
+dup_elixir = 0
+dup_dark_elixir = 0
+dup_builder_elixir = 0
+
+for _, row in live_df.iterrows():
+    r_type = str(row[type_col]).strip().lower()
+    for p in player_cols:
+        try:
+            val = int(row[p]) if pd.notnull(row[p]) else 0
+            dups = max(0, val - 1)
+            
+            if "builder" in r_type:
+                dup_builder_elixir += dups
+            elif "dark" in r_type:
+                dup_dark_elixir += dups
+            elif "elixir" in r_type:
+                dup_elixir += dups
+        except ValueError:
+            pass
+
+# Render directly into the Sidebar
+st.sidebar.divider()
+st.sidebar.subheader("📊 Clan Stats")
+st.sidebar.metric("🤝 Total Trades Done", total_trades_count)
+st.sidebar.metric("❌ Total Missing Cards", total_missing_cards)
+
+with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=False):
+    st.write(f"💧 **Elixir:** `{dup_elixir}`")
+    st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
+    st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
+
+# --- MAIN PAGE CONTINUES ---
+st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
+st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
+edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
+
 st.subheader(f"📋 Live Card Inventory Grid — {st.session_state.clan_tag}")
 st.write("Double-click any cell to edit numbers directly. Edits will feed into the optimizer.")
 edited_df = st.data_editor(live_df, num_rows="dynamic", use_container_width=True, key="live_editor")
