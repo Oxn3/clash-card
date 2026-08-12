@@ -443,53 +443,37 @@ if st.session_state.active_trade is not None:
                     except Exception as err:
                         st.error(f"❌ Failed to write inventory to Google Sheet: {err}")
 
-                # 3. Append historical trade log row into 'Trade_History' worksheet using direct gspread append
+                # 3. Append historical trade log row into separate 'Clan Trade History Log' Google Sheet
                 if sheet_updated:
                     try:
-                        # Format row as a simple list for direct row append
-                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        row_to_append = [
-                            timestamp,
-                            init,
-                            give,
-                            rec,
-                            part,
-                            trade_info['initiated_by']
-                        ]
+                        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL") or "YOUR_NEW_SHEET_URL_HERE"
                         
-                        # Use underlying gspread connection to switch tabs reliably
-                        try:
-                            # 1. Open spreadsheet client
-                            client = conn._instance
-                            sh = client.open_by_url(target_sheet)
-                            
-                            # 2. Select Trade_History worksheet directly
-                            try:
-                                history_ws = sh.worksheet("Trade_History")
-                            except Exception:
-                                # Create worksheet if it doesn't exist yet!
-                                history_ws = sh.add_worksheet(title="Trade_History", rows="100", cols="10")
-                                history_ws.append_row(["Timestamp", "Initiator", "Gave Card", "Received Card", "Partner", "Executed By"])
-                            
-                            # 3. Direct row append (never overwrites, no tab switching bugs!)
-                            history_ws.append_row(row_to_append)
-                            st.toast("📜 Trade logged to history!", icon="📝")
+                        new_log_row = pd.DataFrame([{
+                            "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Initiator": init,
+                            "Gave Card": give,
+                            "Received Card": rec,
+                            "Partner": part,
+                            "Executed By": trade_info['initiated_by']
+                        }])
 
-                        except Exception as direct_err:
-                            # Fallback if conn._instance is structured differently in your library version
-                            new_log_row = pd.DataFrame([{
-                                "Timestamp": timestamp,
-                                "Initiator": init,
-                                "Gave Card": give,
-                                "Received Card": rec,
-                                "Partner": part,
-                                "Executed By": trade_info['initiated_by']
-                            }])
-                            conn.update(spreadsheet=target_sheet, worksheet="Trade_History", data=new_log_row)
-                            st.toast("📜 Trade logged to history!", icon="📝")
+                        # Read existing rows from the separate sheet file
+                        try:
+                            history_df = conn.read(spreadsheet=history_sheet_url, ttl=0)
+                            if history_df is not None and not history_df.empty:
+                                updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
+                            else:
+                                updated_history = new_log_row
+                        except Exception:
+                            updated_history = new_log_row
+
+                        # Write to the dedicated history sheet
+                        conn.update(spreadsheet=history_sheet_url, data=updated_history)
+                        st.toast("📜 Trade logged to History Sheet!", icon="📝")
 
                     except Exception as log_err:
-                        st.warning(f"⚠️ Inventory saved, but history log failed: {log_err}")
+                        # Log notice without failing the main trade confirmation
+                        st.toast(f"⚠️ Inventory saved, but separate history log skipped: {log_err}", icon="⚠️")
 
                     # 4. Reset state and re-optimize
                     st.toast("🎉 Trade completed & logged to history!", icon="✅")
@@ -647,10 +631,10 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
 # --- 11. HISTORICAL TRADE LOGS ---
 st.divider()
 with st.expander("📜 View Trade History Log", expanded=False):
-    st.caption("All confirmed trades logged to the Google Sheet `Trade_History` tab:")
+    st.caption("All confirmed trades logged to the dedicated Trade History Sheet:")
     try:
-        target_sheet = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
-        history_data = conn.read(spreadsheet=target_sheet, worksheet="Trade_History", ttl=10)
+        history_sheet_url = st.secrets.get("HISTORY_SHEET_URL") or "YOUR_NEW_SHEET_URL_HERE"
+        history_data = conn.read(spreadsheet=history_sheet_url, ttl=10)
         
         if history_data is not None and not history_data.empty:
             st.dataframe(
@@ -661,4 +645,4 @@ with st.expander("📜 View Trade History Log", expanded=False):
         else:
             st.info("No trade history recorded yet.")
     except Exception as e:
-        st.info("No `Trade_History` worksheet found in Google Sheet yet. It will automatically populate once a trade is confirmed!")
+        st.info("Connect a valid HISTORY_SHEET_URL to view past trade history.")
