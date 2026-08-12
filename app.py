@@ -446,6 +446,9 @@ if st.session_state.active_trade is not None:
                 # 3. Append historical trade log row into 'Trade_History' worksheet
                 if sheet_updated:
                     try:
+                        # Clear cache so we read fresh history state
+                        st.cache_data.clear()
+
                         new_log_row = pd.DataFrame([{
                             "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "Initiator": init,
@@ -455,25 +458,26 @@ if st.session_state.active_trade is not None:
                             "Executed By": trade_info['initiated_by']
                         }])
                         
-                        # Fetch current history sheet data
+                        # Try reading existing history
                         try:
                             history_df = conn.read(spreadsheet=target_sheet, worksheet="Trade_History", ttl=0)
-                            if history_df is not None and not history_df.empty:
-                                updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
-                            else:
-                                updated_history = new_log_row
-                        except Exception as read_err:
-                            # If tab is blank or fresh
+                        except Exception:
+                            history_df = None
+
+                        if history_df is not None and not history_df.empty:
+                            # Drop any completely empty rows/columns from pandas reading
+                            history_df = history_df.dropna(how="all")
+                            updated_history = pd.concat([history_df, new_log_row], ignore_index=True)
+                        else:
                             updated_history = new_log_row
 
-                        # Push updated log back to Trade_History
+                        # Write back to Google Sheets
                         conn.update(spreadsheet=target_sheet, worksheet="Trade_History", data=updated_history)
-                        st.toast("📜 History logged successfully!", icon="📝")
+                        st.toast("📜 History logged to Google Sheets!", icon="📝")
 
                     except Exception as log_err:
-                        # Display persistent error alert on screen so we can diagnose immediately
                         st.error(f"⚠️ History logging error: {log_err}")
-                        st.info("💡 Make sure your Google Sheet has a tab named exactly 'Trade_History' with column headers in row 1.")
+                        st.info("💡 Ensure the 'Trade_History' tab in Google Sheets has write access and row 1 headers.")
 
                     # 4. Reset state and re-optimize
                     st.toast("🎉 Trade completed & logged to history!", icon="✅")
