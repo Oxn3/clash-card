@@ -1091,7 +1091,9 @@ if (
         st.session_state.stage_1_results, stage_num=1, can_initiate=True
     )
 
-# --- 💡 # --- 💡 UNLOCKABLE TRADES UI SECTION ---
+import streamlit.components.v1 as components
+
+# --- 💡 UNLOCKABLE TRADES UI SECTION ---
 st.write("---")
 st.markdown("### 💡 Unlockable Trades (Recommendations)")
 st.info("Acquiring +1 duplicate copy of any card below will unlock trade options:")
@@ -1103,48 +1105,76 @@ else:
     _, recs, _, _, _ = run_optimization(edited_df)
 
 if recs:
-    formatted_recs = []
+    table_rows = ""
     for r in recs:
-        unlocked_count = r["Trades Unlocked"]
+        unlocked_count = r.get("Trades Unlocked", 0)
         
-        # Only attach tooltip icon if there is a multi-trade chain (> 1 trade)
+        # Create tooltip string if > 1 trade
         if unlocked_count > 1 and "Trade Chain" in r:
-            chain_text = " ➔ ".join(r["Trade Chain"])
-            trades_display = f"{unlocked_count} 🛈 ({chain_text})"
+            chain_tooltip = "&#10;".join(r["Trade Chain"])
+            trades_html = f'<span title="{chain_tooltip}" style="cursor: pointer; text-decoration: underline dotted; color: #60A5FA; font-weight: bold;">{unlocked_count} 🛈</span>'
         else:
-            trades_display = str(unlocked_count)
+            trades_html = f"<span>{unlocked_count}</span>"
 
-        formatted_recs.append({
-            "Player": r["Player"],
-            "Target Card": r["Target Card"],
-            "Type": r["Type"],
-            "Cards Gained": r["Cards Gained"],
-            "Players Benefited": r["Players Benefited"],
-            "Trades Unlocked": trades_display
-        })
+        table_rows += f"""
+        <tr>
+            <td>{r['Player']}</td>
+            <td>{r['Target Card']}</td>
+            <td>{r['Type']}</td>
+            <td>{r['Cards Gained']}</td>
+            <td>{r['Players Benefited']}</td>
+            <td>{trades_html}</td>
+        </tr>
+        """
 
-    df_display = pd.DataFrame(formatted_recs)
+    # HTML + CSS for native tooltip table inside Streamlit iFrame
+    html_code = f"""
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: transparent;
+            color: #FAFAFA;
+            margin: 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }}
+        th {{
+            text-align: left;
+            padding: 10px;
+            border-bottom: 2px solid #374151;
+            color: #9CA3AF;
+        }}
+        td {{
+            padding: 10px;
+            border-bottom: 1px solid #1F2937;
+        }}
+        tr:hover {{
+            background-color: #111827;
+        }}
+    </style>
+    <table>
+        <thead>
+            <tr>
+                <th>Player</th>
+                <th>Target Card</th>
+                <th>Type</th>
+                <th>Cards Gained</th>
+                <th>Players Benefited</th>
+                <th>Trades Unlocked</th>
+            </tr>
+        </thead>
+        <tbody>
+            {table_rows}
+        </tbody>
+    </table>
+    """
 
-    # Clean, full-width Streamlit dataframe display
-    st.dataframe(
-        df_display,
-        use_container_width=True,
-        hide_index=True
-    )
+    # Render iFrame without breaking Streamlit UI
+    components.html(html_code, height=350, scrolling=True)
 
-    # Step-by-Step Inspector for Multi-Step Chains
-    multi_step_recs = [r for r in recs if r["Trades Unlocked"] > 1]
-    if multi_step_recs:
-        st.write("")
-        st.markdown("#### 🔍 Step-by-Step Multi-Trade Chain Inspector")
-        
-        for idx, r in enumerate(multi_step_recs):
-            with st.expander(f"📍 {r['Player']} +1 [{r['Target Card']}] → Unlocks {r['Trades Unlocked']} Trades ({r['Cards Gained']} Cards Gained)"):
-                st.markdown(f"**Target Player:** {r['Player']} | **Card Needed:** `{r['Target Card']}` ({r['Type']})")
-                st.markdown("**Sequence of unlocked trades:**")
-                if "Trade Chain" in r and r["Trade Chain"]:
-                    for step in r["Trade Chain"]:
-                        st.write(f"• {step}")
 else:
     st.warning("No unlockable trade recommendations found for the current state.")
 
