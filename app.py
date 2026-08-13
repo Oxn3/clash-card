@@ -681,7 +681,7 @@ def run_optimization(data_df):
 
     # Comprehensive list of Super Troops
     SUPER_TROOPS_LIST = [
-        "Ice Hound", "Inferno Dragon", "Rocket Balloon", "Super Archer", 
+        "Ice Hound", "Inferno Dragon", "Sneaky Goblin", "Rocket Balloon", "Super Archer", 
         "Super Barbarian", "Super Bowler", "Super Dragon", "Super Giant", 
         "Super Hog Rider", "Super Miner", "Super Minion", "Super Valkyrie", 
         "Super Wall Breaker", "Super Witch", "Super Wizard", "Super Yeti"
