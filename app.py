@@ -287,7 +287,7 @@ except Exception:
     st.error("⚠️ System temporarily offline. Unable to retrieve live inventory.")
     st.stop()
 
-# --- SIDEBAR ANALYTICAL DASHBOARD ---
+# --- 7. SIDEBAR ANALYTICAL DASHBOARD ---
 card_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
 card_col = card_matches[0] if card_matches else live_df.columns[0]
 
@@ -295,6 +295,18 @@ type_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in [
 type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_df.columns) > 1 else live_df.columns[0])
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
+
+# --- NEW: CALCULATE COMPLETED VS INCOMPLETE PLAYERS ---
+total_players = len(player_cols)
+completed_players_count = 0
+
+for p in player_cols:
+    # Check if player has >= 1 copy of every single card in the catalog
+    player_inventory = pd.to_numeric(live_df[p], errors='coerce').fillna(0)
+    if (player_inventory > 0).all():
+        completed_players_count += 1
+
+incomplete_players_count = total_players - completed_players_count
 
 # Stats Analytics
 total_trades_count = 0
@@ -376,16 +388,24 @@ for _, row in live_df.iterrows():
 st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
 
+# --- UI DISPLAY: METRICS GRID ---
 row1_col1, row1_col2 = st.sidebar.columns(2)
 with row1_col1:
     st.metric("🤝 Trades Done", total_trades_count)
 with row1_col2:
     st.metric("🎉 Cards Gained", cards_gained_count)
 
+# --- NEW METRICS ROW FOR EVENT COMPLETION ---
 row2_col1, row2_col2 = st.sidebar.columns(2)
 with row2_col1:
-    st.metric("❌ Unique Missing", f"{unique_missing_cards} / {total_cards_in_catalog}")
+    st.metric("✅ Completed Event", f"{completed_players_count} / {total_players}")
 with row2_col2:
+    st.metric("⏳ Still Collecting", incomplete_players_count)
+
+row3_col1, row3_col2 = st.sidebar.columns(2)
+with row3_col1:
+    st.metric("❌ Unique Missing", f"{unique_missing_cards} / {total_cards_in_catalog}")
+with row3_col2:
     st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
 
 with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
