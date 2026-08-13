@@ -301,7 +301,6 @@ total_players = len(player_cols)
 completed_players_count = 0
 
 for p in player_cols:
-    # Check if player has >= 1 copy of every single card in the catalog
     player_inventory = pd.to_numeric(live_df[p], errors='coerce').fillna(0)
     if (player_inventory > 0).all():
         completed_players_count += 1
@@ -419,7 +418,6 @@ missing_builder_elixir = 0
 for _, row in live_df.iterrows():
     r_type = str(row[type_col]).strip().lower()
     
-    # Check if ALL players are missing this specific card (0 copies across entire clan)
     all_missing = all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
     if all_missing:
         if "builder" in r_type:
@@ -429,7 +427,6 @@ for _, row in live_df.iterrows():
         elif "elixir" in r_type:
             missing_elixir += 1
 
-    # Calculate total extra trade duplicates across players
     for p in player_cols:
         try:
             val = int(row[p]) if pd.notnull(row[p]) else 0
@@ -446,7 +443,6 @@ for _, row in live_df.iterrows():
 
 # --- UI DISPLAY: 2-COLUMN BREAKDOWN STRICTLY INSIDE EXPANDER ---
 with st.sidebar.expander("📦 Clan Card Breakdown", expanded=True) as breakdown_expander:
-    # Use breakdown_expander.columns instead of st.sidebar.columns!
     col_dup, col_miss = breakdown_expander.columns(2)
     
     with col_dup:
@@ -785,7 +781,7 @@ if st.session_state.active_trade is not None:
                     time.sleep(1.5)
                     st.rerun()
 
-    with btn_col2:
+    with btn_col1 if False else btn_col2:
         if st.button("❌ Cancel Trade", type="secondary", use_container_width=True):
             st.info("Trade cancelled.")
             st.session_state.active_trade = None
@@ -812,79 +808,25 @@ with col_b1:
             }
 
 # --- 11. DISPLAY STAGED TRADE OPTIONS ---
-if st.session_state.stage_1_results is not None and st.session_state.active_trade is None:
-    
-    def render_trade_table(sol_data, stage_num, can_initiate=True):
-        trades = sol_data["sol"]["trades"]
-        if len(trades) == 0:
-            st.warning(f"No legal trades available in Stage {stage_num}.")
-            return
-
-        h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7 = st.columns(
-            [0.6, 1.2, 1.5, 1.5, 1.5, 1.5, 1.2], vertical_alignment="center"
-        )
-        h_col1.caption("**Step**")
-        h_col2.caption("**Resource**")
-        h_col3.caption("**Player**")
-        h_col4.caption("**🔴 Gives**")
-        h_col5.caption("**🟢 Receives**")
-        h_col6.caption("**From Partner**")
-        h_col7.caption("**Action**")
-
-        st.markdown("<hr style='margin: 0px 0px 8px 0px;' />", unsafe_allow_html=True)
-
-        for i, trade in enumerate(trades):
-            is_first_trade = (i == 0) and can_initiate
-
-            r_col1, r_col2, r_col3, r_col4, r_col5, r_col6, r_col7 = st.columns(
-                [0.6, 1.2, 1.5, 1.5, 1.5, 1.5, 1.2], vertical_alignment="center"
-            )
-
-            with r_col1:
-                st.write(f"**#{i+1}**")
-            with r_col2:
-                st.write(f"`{trade['Type']}`")
-            with r_col3:
-                st.write(f"**{trade['Initiator']}**")
-            with r_col4:
-                st.write(f"{trade['Give']}")
-            with r_col5:
-                st.write(f"**{trade['Receive']}**")
-            with r_col6:
-                st.write(f"{trade['Partner']}")
-
-            with r_col7:
-                if is_first_trade:
-                    if st.button("🚀 Initiate", key=f"s{stage_num}_init_btn_{i}", type="primary", use_container_width=True):
-                        st.session_state.active_trade = {
-                            "trade": trade,
-                            "initiated_by": st.session_state.player_name,
-                            "start_time": time.time(),
-                            "card_col": sol_data["card_col"]
-                        }
-                        st.rerun()
-                else:
-                    st.button("🔒 Locked", key=f"s{stage_num}_init_btn_{i}", disabled=True, use_container_width=True)
+if (
+    st.session_state.stage_1_results is not None
+    and st.session_state.active_trade is None
+):
 
     # --- STAGE 1 TRADES ---
     st.divider()
     st.subheader("⚡ Stage 1: Active Trade Sequence")
 
     sol_s1 = st.session_state.stage_1_results["sol"]
-    
-    # --- CALCULATE TOP BENEFITED PLAYER FROM STAGE 1 TRADES ---
+
+    # --- FIXED: ACCURATE TOP BENEFITED PLAYER CALCULATION ---
+    # Only count net new missing cards gained by the Initiator (p1)
     player_gains_s1 = {}
-    
-    # Iterate directly over executed_trades in sol_s1["trades"]
+
     for trade in sol_s1.get("trades", []):
         p1 = trade.get("Initiator")
-        p2 = trade.get("Partner")
-        
-        # Each trade gives 1 new missing card to each participating player
         if p1:
             player_gains_s1[str(p1)] = player_gains_s1.get(str(p1), 0) + 1
-        if p2:
-            player_gains_s1[str(p2)] = player_gains_s1.get(str(p2), 0) + 1
 
     top_player_s1 = "None"
     top_gain_s1 = 0
@@ -900,23 +842,151 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
     m4.metric(f"🏆 {top_player_s1}", f"+{top_gain_s1} cards")
 
     st.write("")
-    render_trade_table(st.session_state.stage_1_results, stage_num=1, can_initiate=True)
+
+    # --- FIXED: RENDER TABLE WITH RECIPIENT OWNERSHIP COLORS ---
+    def render_trade_table(sol_data, stage_num, can_initiate=True):
+        trades = sol_data["sol"]["trades"]
+        if len(trades) == 0:
+            st.warning(f"No legal trades available in Stage {stage_num}.")
+            return
+
+        h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7 = st.columns(
+            [0.6, 1.2, 1.5, 1.8, 1.8, 1.5, 1.2], vertical_alignment="center"
+        )
+        h_col1.caption("**Step**")
+        h_col2.caption("**Resource**")
+        h_col3.caption("**Player**")
+        h_col4.caption("**Gives**")
+        h_col5.caption("**Receives**")
+        h_col6.caption("**From Partner**")
+        h_col7.caption("**Action**")
+
+        st.markdown(
+            "<hr style='margin: 0px 0px 8px 0px;' />", unsafe_allow_html=True
+        )
+
+        card_col_name = sol_data["card_col"]
+
+        for i, trade in enumerate(trades):
+            is_first_trade = (i == 0) and can_initiate
+
+            p1 = trade["Initiator"]
+            p2 = trade["Partner"]
+            give_card = trade["Give"]
+            rec_card = trade["Receive"]
+
+            # --- OWNERSHIP CHECK FOR RECIPIENTS OF EACH CARD ---
+            give_row = edited_df[edited_df[card_col_name] == give_card]
+            rec_row = edited_df[edited_df[card_col_name] == rec_card]
+
+            # P2 (Partner) receives give_card
+            p2_give_count = (
+                int(give_row[p2].values[0])
+                if (
+                    not give_row.empty
+                    and p2 in give_row.columns
+                    and pd.notnull(give_row[p2].values[0])
+                )
+                else 0
+            )
+
+            # P1 (Initiator) receives rec_card
+            p1_rec_count = (
+                int(rec_row[p1].values[0])
+                if (
+                    not rec_row.empty
+                    and p1 in rec_row.columns
+                    and pd.notnull(rec_row[p1].values[0])
+                )
+                else 0
+            )
+
+            # 🟢 Green if recipient owns 0 copies (Unowned)
+            # 🟠 Orange if recipient owns >= 1 copy (Duplicate)
+            give_badge = (
+                f":green-background[**{give_card}**]"
+                if p2_give_count == 0
+                else f":orange-background[**{give_card}**]"
+            )
+            rec_badge = (
+                f":green-background[**{rec_card}**]"
+                if p1_rec_count == 0
+                else f":orange-background[**{rec_card}**]"
+            )
+
+            r_col1, r_col2, r_col3, r_col4, r_col5, r_col6, r_col7 = st.columns(
+                [0.6, 1.2, 1.5, 1.8, 1.8, 1.5, 1.2], vertical_alignment="center"
+            )
+
+            with r_col1:
+                st.write(f"**#{i+1}**")
+            with r_col2:
+                st.write(f"`{trade['Type']}`")
+            with r_col3:
+                st.write(f"**{p1}**")
+            with r_col4:
+                st.markdown(give_badge)
+            with r_col5:
+                st.markdown(rec_badge)
+            with r_col6:
+                st.write(f"**{p2}**")
+
+            with r_col7:
+                if is_first_trade:
+                    if st.button(
+                        "🚀 Initiate",
+                        key=f"s{stage_num}_init_btn_{i}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.active_trade = {
+                            "trade": trade,
+                            "initiated_by": st.session_state.player_name,
+                            "start_time": time.time(),
+                            "card_col": sol_data["card_col"],
+                        }
+                        st.rerun()
+                else:
+                    st.button(
+                        "🔒 Locked",
+                        key=f"s{stage_num}_init_btn_{i}",
+                        disabled=True,
+                        use_container_width=True,
+                    )
+
+    render_trade_table(
+        st.session_state.stage_1_results, stage_num=1, can_initiate=True
+    )
 
     # --- UNLOCKABLE RECOMMENDATIONS TABLE ---
-    current_recs = st.session_state.stage_2_results["recs"] if (st.session_state.stage_2_results and len(sol_s1["trades"]) > 0) else st.session_state.stage_1_results["recs"]
-    
+    current_recs = (
+        st.session_state.stage_2_results["recs"]
+        if (
+            st.session_state.stage_2_results
+            and len(sol_s1["trades"]) > 0
+        )
+        else st.session_state.stage_1_results["recs"]
+    )
+
     if len(current_recs) > 0:
         st.divider()
         st.subheader("💡 Unlockable Trades (Recommendations)")
-        st.info("Acquiring +1 duplicate copy of any card below will unlock multi-player trade chains:")
-        
-        recs_df = pd.DataFrame(current_recs)[["Player", "Target Card", "Type", "Cards Gained", "Players Benefited", "Trades Unlocked"]]
-        
-        st.dataframe(
-            recs_df, 
-            use_container_width=True,
-            hide_index=True
+        st.info(
+            "Acquiring +1 duplicate copy of any card below will unlock multi-player trade chains:"
         )
+
+        recs_df = pd.DataFrame(current_recs)[
+            [
+                "Player",
+                "Target Card",
+                "Type",
+                "Cards Gained",
+                "Players Benefited",
+                "Trades Unlocked",
+            ]
+        ]
+
+        st.dataframe(recs_df, use_container_width=True, hide_index=True)
 
 # --- HISTORICAL TRADE LOGS ---
 st.divider()
