@@ -8,7 +8,9 @@ import json
 import socket
 import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
-from scipy.sparse import dok_matrix
+from scipy.sparse import csc_matrix
+import streamlit.components.v1 as components
+from concurrent.futures import ThreadPoolExecutor
 
 # Set global default timeout for all network requests to 5 seconds
 socket.setdefaulttimeout(5)
@@ -494,136 +496,179 @@ with grid_btn_col2:
     target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
     st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
 
-# --- 8. MEMORY-EFFICIENT & FAST ILP ENGINE (NO USELESS TRADES) ---
-def generate_recommendations(inv, catalog, player_cols, all_cards):
-    """Generates recommendations counting ONLY unowned cards gained and benefited players."""
-    num_players, num_cards = inv.shape
-    recs = []
+# --- 8. VECTORIZED OPTIMIZATION ENGINE (FULL TRADE DEPTH RESTORED) ---
+def build_sparse_matrix(num_players, num_cards, inv_mat, candidates):
+    """
+    Directly builds a scipy csc_matrix using numpy array indices for lightning speed.
+    """
+    num_candidates = len(candidates)
+    num_supply = num_players * num_cards
+    num_demand = num_players * num_cards
+    total_constraints = num_supply + num_demand
+
+    b_l = np.zeros(total_constraints, dtype=float)
+    b_u = np.zeros(total_constraints, dtype=float)
+
+    row_idx = 0
+    for i in range(num_players):
+        for g in range(num_cards):
+            dup = max(0, inv_mat[i, g] - 1)
+            b_l[row_idx] = 0.0
+            b_u[row_idx] = float(dup)
+            row_idx += 1
 
     for i in range(num_players):
+        for r in range(num_cards):
+            b_l[row_idx] = 0.0
+            b_u[row_idx] = 1.0
+            row_idx += 1
+
+    data = np.ones(4 * num_candidates, dtype=float)
+    row_indices = np.zeros(4 * num_candidates, dtype=int)
+    col_indices = np.zeros(4 * num_candidates, dtype=int)
+
+    for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
+        base_ptr = idx * 4
+        
+        supply_row_init_give = (p_init * num_cards) + c_give
+        supply_row_part_rec = (p_part * num_cards) + c_rec
+        demand_row_init_rec = num_supply + (p_init * num_cards) + c_rec
+        demand_row_part_give = num_supply + (p_part * num_cards) + c_give
+
+        row_indices[base_ptr] = supply_row_init_give
+        col_indices[base_ptr] = idx
+
+        row_indices[base_ptr + 1] = supply_row_part_rec
+        col_indices[base_ptr + 1] = idx
+
+        row_indices[base_ptr + 2] = demand_row_init_rec
+        col_indices[base_ptr + 2] = idx
+
+        row_indices[base_ptr + 3] = demand_row_part_give
+        col_indices[base_ptr + 3] = idx
+
+    A_csc = csc_matrix((data, (row_indices, col_indices)), shape=(total_constraints, num_candidates))
+    return A_csc, b_l, b_u
+
+
+def generate_recommendations(inv, catalog, player_cols, all_cards):
+    """
+    Simulates recommendations across ALL candidate cards (Full Search Depth restored).
+    """
+    num_players, num_cards = inv.shape
+
+    # Evaluate any player receiving any card to see if it triggers multi-step chain trades
+    candidate_pairs = []
+    for i in range(num_players):
+        if inv[i].sum() == 0:
+            continue
         for c_idx in range(num_cards):
-            if inv[i, c_idx] != 1:
-                continue
+            if inv[i, c_idx] <= 1:
+                candidate_pairs.append((i, c_idx))
 
-            inv_sim = inv.copy()
-            inv_sim[i, c_idx] += 1  # Simulate acquiring +1 duplicate
+    if not candidate_pairs:
+        return []
 
-            sim_candidates = []
-            for p1 in range(num_players):
-                for p2 in range(num_players):
-                    if p1 == p2:
-                        continue
-                    for g in range(num_cards):
-                        if inv_sim[p1, g] < 2:
-                            continue
-                        g_info = catalog[all_cards[g]]
-                        for r in range(num_cards):
-                            if inv_sim[p2, r] < 2:
-                                continue
-                            r_info = catalog[all_cards[r]]
-                            if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
-                                sim_candidates.append((p1, p2, g, r))
+    def eval_candidate(cand):
+        i, c_idx = cand
+        inv_sim = inv.copy()
+        inv_sim[i, c_idx] += 1
 
-            num_sim_candidates = len(sim_candidates)
-            if num_sim_candidates == 0:
-                continue
-
-            c_obj = np.zeros(num_sim_candidates)
-            for idx, (p1, p2, g, r) in enumerate(sim_candidates):
-                is_super = catalog[all_cards[g]]["IsSuper"]
-                p1_unowned_gain = 1 if inv[p1, r] == 0 else 0
-                p2_unowned_gain = 1 if inv[p2, g] == 0 else 0
-                total_unowned = p1_unowned_gain + p2_unowned_gain
-                
-                if total_unowned > 0:
-                    c_obj[idx] = -(1000 * total_unowned + (25 if is_super else 0))
-                else:
-                    c_obj[idx] = 1.0  # Prevent 0-benefit trade loops
-
-            num_supply = num_players * num_cards
-            num_demand = num_players * num_cards
-            total_constraints = num_supply + num_demand
-
-            A_sparse = dok_matrix((total_constraints, num_sim_candidates), dtype=float)
-            b_l = np.zeros(total_constraints)
-            b_u = np.zeros(total_constraints)
-
-            row_idx = 0
-            for p_idx in range(num_players):
+        sim_candidates = []
+        for p1 in range(num_players):
+            for p2 in range(num_players):
+                if p1 == p2:
+                    continue
                 for g in range(num_cards):
-                    dup = max(0, inv_sim[p_idx, g] - 1)
-                    b_l[row_idx] = 0
-                    b_u[row_idx] = dup
-                    row_idx += 1
+                    if inv_sim[p1, g] < 2:
+                        continue
+                    g_info = catalog[all_cards[g]]
+                    for r in range(num_cards):
+                        if inv_sim[p2, r] < 2:
+                            continue
+                        r_info = catalog[all_cards[r]]
+                        if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
+                            sim_candidates.append((p1, p2, g, r))
 
-            for p_idx in range(num_players):
-                for r in range(num_cards):
-                    b_l[row_idx] = 0
-                    b_u[row_idx] = 1
-                    row_idx += 1
+        num_sim_candidates = len(sim_candidates)
+        if num_sim_candidates == 0:
+            return None
 
-            for idx, (p_init, p_part, c_give, c_rec) in enumerate(sim_candidates):
-                supply_row_init_give = (p_init * num_cards) + c_give
-                supply_row_part_rec = (p_part * num_cards) + c_rec
-                demand_row_init_rec = (num_supply) + (p_init * num_cards) + c_rec
-                demand_row_part_give = (num_supply) + (p_part * num_cards) + c_give
+        c_obj = np.zeros(num_sim_candidates)
+        for idx, (p1, p2, g, r) in enumerate(sim_candidates):
+            is_super = catalog[all_cards[g]]["IsSuper"]
+            p1_unowned_gain = 1 if inv[p1, r] == 0 else 0
+            p2_unowned_gain = 1 if inv[p2, g] == 0 else 0
+            total_unowned = p1_unowned_gain + p2_unowned_gain
+            
+            if total_unowned > 0:
+                c_obj[idx] = -(1000 * total_unowned + (25 if is_super else 0))
+            else:
+                c_obj[idx] = 1.0
 
-                A_sparse[supply_row_init_give, idx] += 1
-                A_sparse[supply_row_part_rec, idx] += 1
-                A_sparse[demand_row_init_rec, idx] += 1
-                A_sparse[demand_row_part_give, idx] += 1
+        A_csc, b_l, b_u = build_sparse_matrix(num_players, num_cards, inv_sim, sim_candidates)
+        constraints = LinearConstraint(A_csc, b_l, b_u)
+        integrality = np.ones(num_sim_candidates)
+        bounds = Bounds(lb=0, ub=1)
 
-            constraints = LinearConstraint(A_sparse.tocsc(), b_l, b_u)
-            integrality = np.ones(num_sim_candidates)
-            bounds = Bounds(lb=0, ub=1)
+        res = milp(
+            c=c_obj, 
+            integrality=integrality, 
+            bounds=bounds, 
+            constraints=constraints,
+            options={'mip_rel_gap': 0.01}
+        )
 
-            res = milp(c=c_obj, integrality=integrality, bounds=bounds, constraints=constraints)
+        if res.success and res.x is not None:
+            chosen_indices = np.where(res.x > 0.5)[0]
+            trades_unlocked = len(chosen_indices)
 
-            if res.success and res.x is not None:
-                chosen_indices = np.where(res.x > 0.5)[0]
-                trades_unlocked = len(chosen_indices)
+            if trades_unlocked > 0:
+                curr_state_mat = inv_sim.copy()
+                trade_chain_details = []
 
-                if trades_unlocked > 0:
-                    curr_state_mat = inv_sim.copy()
-                    trade_chain_details = []
+                for step, idx in enumerate(chosen_indices, 1):
+                    p1, p2, g, r = sim_candidates[idx]
+                    curr_state_mat[p1, g] -= 1
+                    curr_state_mat[p1, r] += 1
+                    curr_state_mat[p2, r] -= 1
+                    curr_state_mat[p2, g] += 1
 
-                    for step, idx in enumerate(chosen_indices, 1):
-                        p1, p2, g, r = sim_candidates[idx]
-                        curr_state_mat[p1, g] -= 1
-                        curr_state_mat[p1, r] += 1
-                        curr_state_mat[p2, r] -= 1
-                        curr_state_mat[p2, g] += 1
+                    trade_chain_details.append(
+                        f"Step {step}: {player_cols[p1]} trades [{all_cards[g]}] with {player_cols[p2]} for [{all_cards[r]}]"
+                    )
 
-                        trade_chain_details.append(
-                            f"Step {step}: {player_cols[p1]} trades [{all_cards[g]}] with {player_cols[p2]} for [{all_cards[r]}]"
-                        )
+                benefited_players = set()
+                unowned_cards_gained = 0
 
-                    # --- STRICT KPI CHECK: ONLY UNOWNED CARDS AND BENEFITED PLAYERS ---
-                    benefited_players = set()
-                    unowned_cards_gained = 0
+                for p_idx in range(num_players):
+                    player_unowned_count = 0
+                    for c_i in range(num_cards):
+                        if inv[p_idx, c_i] == 0 and curr_state_mat[p_idx, c_i] > 0:
+                            unowned_cards_gained += 1
+                            player_unowned_count += 1
+                    
+                    if player_unowned_count > 0:
+                        benefited_players.add(player_cols[p_idx])
 
-                    for p_idx in range(num_players):
-                        player_unowned_count = 0
-                        for c_i in range(num_cards):
-                            # Count ONLY if original count was 0 and simulated count becomes >= 1
-                            if inv[p_idx, c_i] == 0 and curr_state_mat[p_idx, c_i] > 0:
-                                unowned_cards_gained += 1
-                                player_unowned_count += 1
-                        
-                        # Player benefits ONLY if they received at least 1 card they previously had 0 of
-                        if player_unowned_count > 0:
-                            benefited_players.add(player_cols[p_idx])
+                if unowned_cards_gained > 0:
+                    return {
+                        "Player": player_cols[i],
+                        "Target Card": all_cards[c_idx],
+                        "Type": catalog[all_cards[c_idx]]["Type"],
+                        "Cards Gained": unowned_cards_gained,
+                        "Players Benefited": len(benefited_players),
+                        "Trades Unlocked": trades_unlocked,
+                        "Trade Chain": trade_chain_details
+                    }
+        return None
 
-                    if unowned_cards_gained > 0:
-                        recs.append({
-                            "Player": player_cols[i],
-                            "Target Card": all_cards[c_idx],
-                            "Type": catalog[all_cards[c_idx]]["Type"],
-                            "Cards Gained": unowned_cards_gained,
-                            "Players Benefited": len(benefited_players),
-                            "Trades Unlocked": trades_unlocked,
-                            "Trade Chain": trade_chain_details
-                        })
+    recs = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = executor.map(eval_candidate, candidate_pairs)
+        for r in results:
+            if r is not None:
+                recs.append(r)
 
     recs.sort(key=lambda x: (x["Cards Gained"], x["Trades Unlocked"]), reverse=True)
     return recs[:10]
@@ -696,45 +741,18 @@ def run_optimization(data_df):
         else:
             c_obj[idx] = 1.0
 
-    num_supply = num_players * num_cards
-    num_demand = num_players * num_cards
-    total_constraints = num_supply + num_demand
-
-    A_sparse = dok_matrix((total_constraints, num_candidates), dtype=float)
-    b_l = np.zeros(total_constraints)
-    b_u = np.zeros(total_constraints)
-
-    row_idx = 0
-
-    for i in range(num_players):
-        for g in range(num_cards):
-            dup = max(0, inv[i, g] - 1)
-            b_l[row_idx] = 0
-            b_u[row_idx] = dup
-            row_idx += 1
-
-    for i in range(num_players):
-        for r in range(num_cards):
-            b_l[row_idx] = 0
-            b_u[row_idx] = 1
-            row_idx += 1
-
-    for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
-        supply_row_init_give = (p_init * num_cards) + c_give
-        supply_row_part_rec = (p_part * num_cards) + c_rec
-        demand_row_init_rec = (num_supply) + (p_init * num_cards) + c_rec
-        demand_row_part_give = (num_supply) + (p_part * num_cards) + c_give
-
-        A_sparse[supply_row_init_give, idx] += 1
-        A_sparse[supply_row_part_rec, idx] += 1
-        A_sparse[demand_row_init_rec, idx] += 1
-        A_sparse[demand_row_part_give, idx] += 1
-
-    constraints = LinearConstraint(A_sparse.tocsc(), b_l, b_u)
+    A_csc, b_l, b_u = build_sparse_matrix(num_players, num_cards, inv, candidates)
+    constraints = LinearConstraint(A_csc, b_l, b_u)
     integrality = np.ones(num_candidates)
     bounds = Bounds(lb=0, ub=1)
 
-    res = milp(c=c_obj, integrality=integrality, bounds=bounds, constraints=constraints)
+    res = milp(
+        c=c_obj, 
+        integrality=integrality, 
+        bounds=bounds, 
+        constraints=constraints,
+        options={'mip_rel_gap': 0.01}
+    )
 
     executed_trades = []
     curr_state_mat = inv.copy()
@@ -761,7 +779,6 @@ def run_optimization(data_df):
     benefited_players = set()
     unowned_cards_gained = 0
 
-    # --- STRICT KPI CHECK FOR MAIN OPTIMIZER STAGE ---
     for p_idx, p in enumerate(player_cols):
         curr_state[p] = {}
         player_unowned_count = 0
@@ -770,12 +787,10 @@ def run_optimization(data_df):
             final_val = int(curr_state_mat[p_idx, c_idx])
             curr_state[p][c] = final_val
             
-            # Count strictly if initial inventory was 0 and result is > 0
             if inv[p_idx, c_idx] == 0 and final_val > 0:
                 unowned_cards_gained += 1
                 player_unowned_count += 1
         
-        # Player is benefited ONLY if they gained an unowned card
         if player_unowned_count > 0:
             benefited_players.add(p)
 
@@ -921,15 +936,22 @@ if st.session_state.active_trade is not None:
 # --- 10. BUTTON ACTIONS ---
 col_b1, col_b2 = st.columns([1, 4])
 
+show_calc_button = (
+    st.session_state.active_trade is None
+)
+
 with col_b1:
-    if st.button("🚀 Calculate Trade Options", type="primary"):
-        st.session_state.active_trade = None
-        st.session_state.stage_2_results = None
-        with st.spinner("Calculating optimal trade sequences..."):
-            sol, recs, players, updated_df, card_col = run_optimization(edited_df)
-            st.session_state.stage_1_results = {
-                "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
-            }
+    if show_calc_button:
+        if st.button("🚀 Calculate Trade Options", type="primary"):
+            st.session_state.active_trade = None
+            st.session_state.stage_2_results = None
+            with st.spinner("Calculating optimal trade sequences..."):
+                sol, recs, players, updated_df, card_col = run_optimization(edited_df)
+                st.session_state.stage_1_results = {
+                    "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
+                }
+                st.rerun()
+
 
 # --- 11. DISPLAY STAGED TRADE OPTIONS ---
 if (
@@ -942,9 +964,10 @@ if (
 
     sol_s1 = st.session_state.stage_1_results["sol"]
     updated_df_s1 = st.session_state.stage_1_results["updated_df"]
+    trades_list = sol_s1.get("trades", [])
 
     player_gains_s1 = {}
-    for trade in sol_s1.get("trades", []):
+    for trade in trades_list:
         p1 = trade.get("Initiator")
         if p1:
             player_gains_s1[str(p1)] = player_gains_s1.get(str(p1), 0) + 1
@@ -970,7 +993,7 @@ if (
     new_completions = post_completed_count - pre_completed_count
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Trades", len(sol_s1["trades"]))
+    m1.metric("Total Trades", len(trades_list))
     m2.metric("Missing Cards Gained", sol_s1["missing"])
     m3.metric("Players Benefited", sol_s1["players"])
     m4.metric(
@@ -1087,96 +1110,89 @@ if (
                         use_container_width=True,
                     )
 
-    render_trade_table(
-        st.session_state.stage_1_results, stage_num=1, can_initiate=True
-    )
+    if len(trades_list) > 0:
+        render_trade_table(
+            st.session_state.stage_1_results, stage_num=1, can_initiate=True
+        )
 
-import streamlit.components.v1 as components
+    # --- 💡 UNLOCKABLE TRADES UI SECTION (ONLY IF NO DIRECT TRADES) ---
+    else:
+        st.write("---")
+        st.markdown("### 💡 Unlockable Trades (Recommendations)")
+        st.info("Acquiring +1 duplicate copy of any card below will unlock trade options:")
 
-# --- 💡 UNLOCKABLE TRADES UI SECTION ---
-st.write("---")
-st.markdown("### 💡 Unlockable Trades (Recommendations)")
-st.info("Acquiring +1 duplicate copy of any card below will unlock trade options:")
+        recs = st.session_state.stage_1_results.get("recs", [])
 
-recs = None
-if st.session_state.stage_1_results is not None:
-    recs = st.session_state.stage_1_results.get("recs")
-else:
-    _, recs, _, _, _ = run_optimization(edited_df)
+        if recs:
+            table_rows = ""
+            for r in recs:
+                unlocked_count = r.get("Trades Unlocked", 0)
+                
+                if unlocked_count > 1 and "Trade Chain" in r:
+                    chain_tooltip = "&#10;".join(r["Trade Chain"])
+                    trades_html = f'<span title="{chain_tooltip}" style="cursor: pointer; text-decoration: underline dotted; color: #60A5FA; font-weight: bold;">{unlocked_count} 🛈</span>'
+                else:
+                    trades_html = f"<span>{unlocked_count}</span>"
 
-if recs:
-    table_rows = ""
-    for r in recs:
-        unlocked_count = r.get("Trades Unlocked", 0)
-        
-        # Create tooltip string if > 1 trade
-        if unlocked_count > 1 and "Trade Chain" in r:
-            chain_tooltip = "&#10;".join(r["Trade Chain"])
-            trades_html = f'<span title="{chain_tooltip}" style="cursor: pointer; text-decoration: underline dotted; color: #60A5FA; font-weight: bold;">{unlocked_count} 🛈</span>'
+                table_rows += f"""
+                <tr>
+                    <td>{r['Player']}</td>
+                    <td>{r['Target Card']}</td>
+                    <td>{r['Type']}</td>
+                    <td>{r['Cards Gained']}</td>
+                    <td>{r['Players Benefited']}</td>
+                    <td>{trades_html}</td>
+                </tr>
+                """
+
+            html_code = f"""
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    background-color: transparent;
+                    color: #FAFAFA;
+                    margin: 0;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 14px;
+                }}
+                th {{
+                    text-align: left;
+                    padding: 10px;
+                    border-bottom: 2px solid #374151;
+                    color: #9CA3AF;
+                }}
+                td {{
+                    padding: 10px;
+                    border-bottom: 1px solid #1F2937;
+                }}
+                tr:hover {{
+                    background-color: #111827;
+                }}
+            </style>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Target Card</th>
+                        <th>Type</th>
+                        <th>Cards Gained</th>
+                        <th>Players Benefited</th>
+                        <th>Trades Unlocked</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {table_rows}
+                </tbody>
+            </table>
+            """
+
+            components.html(html_code, height=350, scrolling=True)
+
         else:
-            trades_html = f"<span>{unlocked_count}</span>"
-
-        table_rows += f"""
-        <tr>
-            <td>{r['Player']}</td>
-            <td>{r['Target Card']}</td>
-            <td>{r['Type']}</td>
-            <td>{r['Cards Gained']}</td>
-            <td>{r['Players Benefited']}</td>
-            <td>{trades_html}</td>
-        </tr>
-        """
-
-    # HTML + CSS for native tooltip table inside Streamlit iFrame
-    html_code = f"""
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: transparent;
-            color: #FAFAFA;
-            margin: 0;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
-        }}
-        th {{
-            text-align: left;
-            padding: 10px;
-            border-bottom: 2px solid #374151;
-            color: #9CA3AF;
-        }}
-        td {{
-            padding: 10px;
-            border-bottom: 1px solid #1F2937;
-        }}
-        tr:hover {{
-            background-color: #111827;
-        }}
-    </style>
-    <table>
-        <thead>
-            <tr>
-                <th>Player</th>
-                <th>Target Card</th>
-                <th>Type</th>
-                <th>Cards Gained</th>
-                <th>Players Benefited</th>
-                <th>Trades Unlocked</th>
-            </tr>
-        </thead>
-        <tbody>
-            {table_rows}
-        </tbody>
-    </table>
-    """
-
-    # Render iFrame without breaking Streamlit UI
-    components.html(html_code, height=350, scrolling=True)
-
-else:
-    st.warning("No unlockable trade recommendations found for the current state.")
+            st.warning("No unlockable trade recommendations found for the current state.")
 
 # --- HISTORICAL TRADE LOGS ---
 st.divider()
