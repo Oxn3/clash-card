@@ -8,6 +8,7 @@ import json
 import socket
 import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
+from scipy.sparse import dok_matrix
 
 # Set global default timeout for all network requests to 5 seconds
 socket.setdefaulttimeout(5)
@@ -296,7 +297,7 @@ type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
-# --- NEW: CALCULATE COMPLETED VS INCOMPLETE PLAYERS ---
+# --- CALCULATE COMPLETED VS INCOMPLETE PLAYERS ---
 total_players = len(player_cols)
 completed_players_count = 0
 
@@ -364,26 +365,6 @@ for _, row in live_df.iterrows():
     if all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols):
         unique_missing_cards += 1
 
-dup_elixir = 0
-dup_dark_elixir = 0
-dup_builder_elixir = 0
-
-for _, row in live_df.iterrows():
-    r_type = str(row[type_col]).strip().lower()
-    for p in player_cols:
-        try:
-            val = int(row[p]) if pd.notnull(row[p]) else 0
-            dups = max(0, val - 1)
-            
-            if "builder" in r_type:
-                dup_builder_elixir += dups
-            elif "dark" in r_type:
-                dup_dark_elixir += dups
-            elif "elixir" in r_type:
-                dup_elixir += dups
-        except ValueError:
-            pass
-
 st.sidebar.subheader("📊 Clan Stats")
 
 # --- UI DISPLAY: METRICS GRID ---
@@ -393,7 +374,6 @@ with row1_col1:
 with row1_col2:
     st.metric("🎉 Cards Gained", cards_gained_count)
 
-# --- NEW METRICS ROW FOR EVENT COMPLETION ---
 row2_col1, row2_col2 = st.sidebar.columns(2)
 with row2_col1:
     st.metric("✅ Completed Event", f"{completed_players_count} / {total_players}")
@@ -514,11 +494,141 @@ with grid_btn_col2:
     target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
     st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
 
-import numpy as np
-from scipy.optimize import milp, LinearConstraint, Bounds
-from scipy.sparse import dok_matrix
+# --- 8. MEMORY-EFFICIENT & FAST ILP ENGINE (NO USELESS TRADES) ---
+def generate_recommendations(inv, catalog, player_cols, all_cards):
+    """Generates recommendations counting ONLY unowned cards gained and benefited players."""
+    num_players, num_cards = inv.shape
+    recs = []
 
-# --- 8. MEMORY-EFFICIENT ILP ENGINE (< 15MB RAM USAGE) ---
+    for i in range(num_players):
+        for c_idx in range(num_cards):
+            if inv[i, c_idx] != 1:
+                continue
+
+            inv_sim = inv.copy()
+            inv_sim[i, c_idx] += 1  # Simulate acquiring +1 duplicate
+
+            sim_candidates = []
+            for p1 in range(num_players):
+                for p2 in range(num_players):
+                    if p1 == p2:
+                        continue
+                    for g in range(num_cards):
+                        if inv_sim[p1, g] < 2:
+                            continue
+                        g_info = catalog[all_cards[g]]
+                        for r in range(num_cards):
+                            if inv_sim[p2, r] < 2:
+                                continue
+                            r_info = catalog[all_cards[r]]
+                            if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
+                                sim_candidates.append((p1, p2, g, r))
+
+            num_sim_candidates = len(sim_candidates)
+            if num_sim_candidates == 0:
+                continue
+
+            c_obj = np.zeros(num_sim_candidates)
+            for idx, (p1, p2, g, r) in enumerate(sim_candidates):
+                is_super = catalog[all_cards[g]]["IsSuper"]
+                p1_unowned_gain = 1 if inv[p1, r] == 0 else 0
+                p2_unowned_gain = 1 if inv[p2, g] == 0 else 0
+                total_unowned = p1_unowned_gain + p2_unowned_gain
+                
+                if total_unowned > 0:
+                    c_obj[idx] = -(1000 * total_unowned + (25 if is_super else 0))
+                else:
+                    c_obj[idx] = 1.0  # Prevent 0-benefit trade loops
+
+            num_supply = num_players * num_cards
+            num_demand = num_players * num_cards
+            total_constraints = num_supply + num_demand
+
+            A_sparse = dok_matrix((total_constraints, num_sim_candidates), dtype=float)
+            b_l = np.zeros(total_constraints)
+            b_u = np.zeros(total_constraints)
+
+            row_idx = 0
+            for p_idx in range(num_players):
+                for g in range(num_cards):
+                    dup = max(0, inv_sim[p_idx, g] - 1)
+                    b_l[row_idx] = 0
+                    b_u[row_idx] = dup
+                    row_idx += 1
+
+            for p_idx in range(num_players):
+                for r in range(num_cards):
+                    b_l[row_idx] = 0
+                    b_u[row_idx] = 1
+                    row_idx += 1
+
+            for idx, (p_init, p_part, c_give, c_rec) in enumerate(sim_candidates):
+                supply_row_init_give = (p_init * num_cards) + c_give
+                supply_row_part_rec = (p_part * num_cards) + c_rec
+                demand_row_init_rec = (num_supply) + (p_init * num_cards) + c_rec
+                demand_row_part_give = (num_supply) + (p_part * num_cards) + c_give
+
+                A_sparse[supply_row_init_give, idx] += 1
+                A_sparse[supply_row_part_rec, idx] += 1
+                A_sparse[demand_row_init_rec, idx] += 1
+                A_sparse[demand_row_part_give, idx] += 1
+
+            constraints = LinearConstraint(A_sparse.tocsc(), b_l, b_u)
+            integrality = np.ones(num_sim_candidates)
+            bounds = Bounds(lb=0, ub=1)
+
+            res = milp(c=c_obj, integrality=integrality, bounds=bounds, constraints=constraints)
+
+            if res.success and res.x is not None:
+                chosen_indices = np.where(res.x > 0.5)[0]
+                trades_unlocked = len(chosen_indices)
+
+                if trades_unlocked > 0:
+                    curr_state_mat = inv_sim.copy()
+                    trade_chain_details = []
+
+                    for step, idx in enumerate(chosen_indices, 1):
+                        p1, p2, g, r = sim_candidates[idx]
+                        curr_state_mat[p1, g] -= 1
+                        curr_state_mat[p1, r] += 1
+                        curr_state_mat[p2, r] -= 1
+                        curr_state_mat[p2, g] += 1
+
+                        trade_chain_details.append(
+                            f"Step {step}: {player_cols[p1]} trades [{all_cards[g]}] with {player_cols[p2]} for [{all_cards[r]}]"
+                        )
+
+                    # --- STRICT KPI CHECK: ONLY UNOWNED CARDS AND BENEFITED PLAYERS ---
+                    benefited_players = set()
+                    unowned_cards_gained = 0
+
+                    for p_idx in range(num_players):
+                        player_unowned_count = 0
+                        for c_i in range(num_cards):
+                            # Count ONLY if original count was 0 and simulated count becomes >= 1
+                            if inv[p_idx, c_i] == 0 and curr_state_mat[p_idx, c_i] > 0:
+                                unowned_cards_gained += 1
+                                player_unowned_count += 1
+                        
+                        # Player benefits ONLY if they received at least 1 card they previously had 0 of
+                        if player_unowned_count > 0:
+                            benefited_players.add(player_cols[p_idx])
+
+                    if unowned_cards_gained > 0:
+                        recs.append({
+                            "Player": player_cols[i],
+                            "Target Card": all_cards[c_idx],
+                            "Type": catalog[all_cards[c_idx]]["Type"],
+                            "Cards Gained": unowned_cards_gained,
+                            "Players Benefited": len(benefited_players),
+                            "Trades Unlocked": trades_unlocked,
+                            "Trade Chain": trade_chain_details
+                        })
+
+    recs.sort(key=lambda x: (x["Cards Gained"], x["Trades Unlocked"]), reverse=True)
+    return recs[:10]
+
+
 def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
@@ -540,7 +650,6 @@ def run_optimization(data_df):
     num_players = len(player_cols)
     num_cards = len(all_cards)
 
-    # Initial inventory matrix
     inv = np.zeros((num_players, num_cards), dtype=int)
     for p_idx, p in enumerate(player_cols):
         for c_idx, c in enumerate(all_cards):
@@ -550,46 +659,53 @@ def run_optimization(data_df):
             except:
                 inv[p_idx, c_idx] = 0
 
-    # Build candidate legal trades list
     candidates = []
     for i in range(num_players):
         for j in range(num_players):
-            if i == j: continue
+            if i == j: 
+                continue
             for g in range(num_cards):
-                if inv[i, g] < 2: continue
+                if inv[i, g] < 2: 
+                    continue
                 g_info = catalog[all_cards[g]]
                 for r in range(num_cards):
-                    if inv[i, r] != 0 or inv[j, r] < 2: continue
+                    if inv[j, r] < 2: 
+                        continue
                     r_info = catalog[all_cards[r]]
                     if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
                         candidates.append((i, j, g, r))
 
     num_candidates = len(candidates)
+    recs = generate_recommendations(inv, catalog, player_cols, all_cards)
 
     if num_candidates == 0:
         curr_state = {p: {c: int(inv[p_idx, c_idx]) for c_idx, c in enumerate(all_cards)} for p_idx, p in enumerate(player_cols)}
         sol = {"trades": [], "state": curr_state, "missing": 0, "players": 0}
-        return sol, [], player_cols, data_df.copy(), card_col
+        return sol, recs, player_cols, data_df.copy(), card_col
 
-    # --- MEMORY-SAVING SPARSE MATRIX FORMULATION ---
     c_obj = np.zeros(num_candidates)
     for idx, (i, j, g, r) in enumerate(candidates):
         is_super = catalog[all_cards[g]]["IsSuper"]
-        c_obj[idx] = -(100 + (25 if is_super else 0))
+        
+        i_gains_unowned = 1 if inv[i, r] == 0 else 0
+        j_gains_unowned = 1 if inv[j, g] == 0 else 0
+        total_unowned = i_gains_unowned + j_gains_unowned
 
-    # Calculate exact total constraints rows to pre-allocate
+        if total_unowned > 0:
+            c_obj[idx] = -(1000 * total_unowned + (25 if is_super else 0))
+        else:
+            c_obj[idx] = 1.0
+
     num_supply = num_players * num_cards
     num_demand = num_players * num_cards
     total_constraints = num_supply + num_demand
 
-    # Use Sparse Matrix (DOK format) so zeroes do NOT consume RAM
     A_sparse = dok_matrix((total_constraints, num_candidates), dtype=float)
     b_l = np.zeros(total_constraints)
     b_u = np.zeros(total_constraints)
 
     row_idx = 0
 
-    # 1. Supply Constraints
     for i in range(num_players):
         for g in range(num_cards):
             dup = max(0, inv[i, g] - 1)
@@ -597,29 +713,27 @@ def run_optimization(data_df):
             b_u[row_idx] = dup
             row_idx += 1
 
-    # 2. Demand Constraints
     for i in range(num_players):
         for r in range(num_cards):
             b_l[row_idx] = 0
-            b_u[row_idx] = 1 if inv[i, r] == 0 else 0
+            b_u[row_idx] = 1
             row_idx += 1
 
-    # Map variables directly into sparse matrix without copying lists
     for idx, (p_init, p_part, c_give, c_rec) in enumerate(candidates):
         supply_row_init_give = (p_init * num_cards) + c_give
         supply_row_part_rec = (p_part * num_cards) + c_rec
         demand_row_init_rec = (num_supply) + (p_init * num_cards) + c_rec
+        demand_row_part_give = (num_supply) + (p_part * num_cards) + c_give
 
         A_sparse[supply_row_init_give, idx] += 1
         A_sparse[supply_row_part_rec, idx] += 1
         A_sparse[demand_row_init_rec, idx] += 1
+        A_sparse[demand_row_part_give, idx] += 1
 
-    # Convert to Compressed Sparse Column format for Scipy
     constraints = LinearConstraint(A_sparse.tocsc(), b_l, b_u)
     integrality = np.ones(num_candidates)
     bounds = Bounds(lb=0, ub=1)
 
-    # Solve MILP
     res = milp(c=c_obj, integrality=integrality, bounds=bounds, constraints=constraints)
 
     executed_trades = []
@@ -629,10 +743,11 @@ def run_optimization(data_df):
         chosen_indices = np.where(res.x > 0.5)[0]
         for idx in chosen_indices:
             i, j, g, r = candidates[idx]
+            
             curr_state_mat[i, g] -= 1
-            curr_state_mat[j, g] += 1
-            curr_state_mat[j, r] -= 1
             curr_state_mat[i, r] += 1
+            curr_state_mat[j, r] -= 1
+            curr_state_mat[j, g] += 1
 
             executed_trades.append({
                 "Initiator": player_cols[i],
@@ -644,21 +759,30 @@ def run_optimization(data_df):
 
     curr_state = {}
     benefited_players = set()
-    missing_gained = 0
+    unowned_cards_gained = 0
 
+    # --- STRICT KPI CHECK FOR MAIN OPTIMIZER STAGE ---
     for p_idx, p in enumerate(player_cols):
         curr_state[p] = {}
+        player_unowned_count = 0
+        
         for c_idx, c in enumerate(all_cards):
             final_val = int(curr_state_mat[p_idx, c_idx])
             curr_state[p][c] = final_val
+            
+            # Count strictly if initial inventory was 0 and result is > 0
             if inv[p_idx, c_idx] == 0 and final_val > 0:
-                missing_gained += 1
-                benefited_players.add(p)
+                unowned_cards_gained += 1
+                player_unowned_count += 1
+        
+        # Player is benefited ONLY if they gained an unowned card
+        if player_unowned_count > 0:
+            benefited_players.add(p)
 
     sol = {
         "trades": executed_trades,
         "state": curr_state,
-        "missing": missing_gained,
+        "missing": unowned_cards_gained,
         "players": len(benefited_players)
     }
 
@@ -668,7 +792,7 @@ def run_optimization(data_df):
             card_name = str(row[card_col])
             updated_df.at[idx, p] = curr_state[p].get(card_name, row[p])
 
-    return sol, [], player_cols, updated_df, card_col
+    return sol, recs, player_cols, updated_df, card_col
 
 # --- 9. TRADE MONITORING ENGINE ---
 if st.session_state.active_trade is not None:
@@ -813,16 +937,13 @@ if (
     and st.session_state.active_trade is None
 ):
 
-    # --- STAGE 1 TRADES ---
     st.divider()
     st.subheader("⚡ Stage 1: Active Trade Sequence")
 
     sol_s1 = st.session_state.stage_1_results["sol"]
+    updated_df_s1 = st.session_state.stage_1_results["updated_df"]
 
-    # --- FIXED: ACCURATE TOP BENEFITED PLAYER CALCULATION ---
-    # Only count net new missing cards gained by the Initiator (p1)
     player_gains_s1 = {}
-
     for trade in sol_s1.get("trades", []):
         p1 = trade.get("Initiator")
         if p1:
@@ -834,20 +955,37 @@ if (
         top_player_s1 = max(player_gains_s1, key=player_gains_s1.get)
         top_gain_s1 = player_gains_s1[top_player_s1]
 
-    # --- UI DISPLAY: 4 COLUMNS ---
-    m1, m2, m3, m4 = st.columns(4)
+    pre_completed_count = 0
+    post_completed_count = 0
+
+    for p in player_cols:
+        pre_inv = pd.to_numeric(edited_df[p], errors='coerce').fillna(0)
+        if (pre_inv > 0).all():
+            pre_completed_count += 1
+        
+        post_inv = pd.to_numeric(updated_df_s1[p], errors='coerce').fillna(0)
+        if (post_inv > 0).all():
+            post_completed_count += 1
+
+    new_completions = post_completed_count - pre_completed_count
+
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total Trades", len(sol_s1["trades"]))
     m2.metric("Missing Cards Gained", sol_s1["missing"])
     m3.metric("Players Benefited", sol_s1["players"])
-    m4.metric(f"🏆 {top_player_s1}", f"+{top_gain_s1} cards")
+    m4.metric(
+        "Event Completed", 
+        f"{post_completed_count} / {len(player_cols)}", 
+        delta=f"+{new_completions} New" if new_completions > 0 else None
+    )
+    m5.metric(f"🏆 {top_player_s1}", f"+{top_gain_s1} cards")
 
     st.write("")
 
-    # --- FIXED: RENDER TABLE WITH RECIPIENT OWNERSHIP COLORS ---
     def render_trade_table(sol_data, stage_num, can_initiate=True):
         trades = sol_data["sol"]["trades"]
         if len(trades) == 0:
-            st.warning(f"No legal trades available in Stage {stage_num}.")
+            st.warning("⚠️ No direct trades available right now.")
             return
 
         h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7 = st.columns(
@@ -875,11 +1013,9 @@ if (
             give_card = trade["Give"]
             rec_card = trade["Receive"]
 
-            # --- OWNERSHIP CHECK FOR RECIPIENTS OF EACH CARD ---
             give_row = edited_df[edited_df[card_col_name] == give_card]
             rec_row = edited_df[edited_df[card_col_name] == rec_card]
 
-            # P2 (Partner) receives give_card
             p2_give_count = (
                 int(give_row[p2].values[0])
                 if (
@@ -890,7 +1026,6 @@ if (
                 else 0
             )
 
-            # P1 (Initiator) receives rec_card
             p1_rec_count = (
                 int(rec_row[p1].values[0])
                 if (
@@ -901,8 +1036,6 @@ if (
                 else 0
             )
 
-            # 🟢 Green if recipient owns 0 copies (Unowned)
-            # 🟠 Orange if recipient owns >= 1 copy (Duplicate)
             give_badge = (
                 f":green-background[**{give_card}**]"
                 if p2_give_count == 0
@@ -958,35 +1091,62 @@ if (
         st.session_state.stage_1_results, stage_num=1, can_initiate=True
     )
 
-    # --- UNLOCKABLE RECOMMENDATIONS TABLE ---
-    current_recs = (
-        st.session_state.stage_2_results["recs"]
-        if (
-            st.session_state.stage_2_results
-            and len(sol_s1["trades"]) > 0
-        )
-        else st.session_state.stage_1_results["recs"]
+# --- 💡 # --- 💡 UNLOCKABLE TRADES UI SECTION ---
+st.write("---")
+st.markdown("### 💡 Unlockable Trades (Recommendations)")
+st.info("Acquiring +1 duplicate copy of any card below will unlock trade options:")
+
+recs = None
+if st.session_state.stage_1_results is not None:
+    recs = st.session_state.stage_1_results.get("recs")
+else:
+    _, recs, _, _, _ = run_optimization(edited_df)
+
+if recs:
+    formatted_recs = []
+    for r in recs:
+        unlocked_count = r["Trades Unlocked"]
+        
+        # Only attach tooltip icon if there is a multi-trade chain (> 1 trade)
+        if unlocked_count > 1 and "Trade Chain" in r:
+            chain_text = " ➔ ".join(r["Trade Chain"])
+            trades_display = f"{unlocked_count} 🛈 ({chain_text})"
+        else:
+            trades_display = str(unlocked_count)
+
+        formatted_recs.append({
+            "Player": r["Player"],
+            "Target Card": r["Target Card"],
+            "Type": r["Type"],
+            "Cards Gained": r["Cards Gained"],
+            "Players Benefited": r["Players Benefited"],
+            "Trades Unlocked": trades_display
+        })
+
+    df_display = pd.DataFrame(formatted_recs)
+
+    # Clean, full-width Streamlit dataframe display
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True
     )
 
-    if len(current_recs) > 0:
-        st.divider()
-        st.subheader("💡 Unlockable Trades (Recommendations)")
-        st.info(
-            "Acquiring +1 duplicate copy of any card below will unlock multi-player trade chains:"
-        )
-
-        recs_df = pd.DataFrame(current_recs)[
-            [
-                "Player",
-                "Target Card",
-                "Type",
-                "Cards Gained",
-                "Players Benefited",
-                "Trades Unlocked",
-            ]
-        ]
-
-        st.dataframe(recs_df, use_container_width=True, hide_index=True)
+    # Step-by-Step Inspector for Multi-Step Chains
+    multi_step_recs = [r for r in recs if r["Trades Unlocked"] > 1]
+    if multi_step_recs:
+        st.write("")
+        st.markdown("#### 🔍 Step-by-Step Multi-Trade Chain Inspector")
+        
+        for idx, r in enumerate(multi_step_recs):
+            with st.expander(f"📍 {r['Player']} +1 [{r['Target Card']}] → Unlocks {r['Trades Unlocked']} Trades ({r['Cards Gained']} Cards Gained)"):
+                st.markdown(f"**Target Player:** {r['Player']} | **Card Needed:** `{r['Target Card']}` ({r['Type']})")
+                st.markdown("**Sequence of unlocked trades:**")
+                if "Trade Chain" in r and r["Trade Chain"]:
+                    for step in r["Trade Chain"]:
+                        st.write(f"• {step}")
+else:
+    st.warning("No unlockable trade recommendations found for the current state.")
 
 # --- HISTORICAL TRADE LOGS ---
 st.divider()
