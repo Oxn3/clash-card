@@ -496,7 +496,7 @@ with grid_btn_col2:
     target_sheet_url = st.session_state.get("sheet_url") or st.secrets.get("MASTER_REGISTRY_URL")
     st.link_button("🔗 Open Google Sheet", target_sheet_url, use_container_width=True)
 
-# --- 8. VECTORIZED OPTIMIZATION ENGINE (FULL TRADE DEPTH RESTORED) ---
+# --- 8. VECTORIZED OPTIMIZATION ENGINE & CANDIDATE GENERATOR ---
 def build_sparse_matrix(num_players, num_cards, inv_mat, candidates):
     """
     Directly builds a scipy csc_matrix using numpy array indices for lightning speed.
@@ -551,13 +551,63 @@ def build_sparse_matrix(num_players, num_cards, inv_mat, candidates):
     return A_csc, b_l, b_u
 
 
+def generate_candidate_trades(inv_mat, catalog, all_cards, num_players, num_cards):
+    # Group card indices by type
+    type_card_indices = {}
+    for c_idx, c_name in enumerate(all_cards):
+        c_type = catalog[c_name]["Type"]
+        type_card_indices.setdefault(c_type, []).append(c_idx)
+
+    # RULE 6: Track players with 100% collection for a specific card type
+    player_completed_types = {p_idx: set() for p_idx in range(num_players)}
+    for p_idx in range(num_players):
+        for c_type, indices_list in type_card_indices.items():
+            if all(inv_mat[p_idx, c_i] > 0 for c_i in indices_list):
+                player_completed_types[p_idx].add(c_type)
+
+    candidates = []
+    for i in range(num_players):
+        for j in range(num_players):
+            if i == j:
+                continue
+
+            for g in range(num_cards):
+                # RULE 1: Player A must have a duplicate to give (count >= 2)[cite: 1]
+                if inv_mat[i, g] < 2:
+                    continue
+
+                g_info = catalog[all_cards[g]]
+                card_type = g_info["Type"]
+
+                # RULE 6: Player A cannot initiate if 100% of that type is collected[cite: 1]
+                if card_type in player_completed_types[i]:
+                    continue
+
+                for r in range(num_cards):
+                    # RULE 2: Player A must receive an UNOWNED card (count == 0)[cite: 1]
+                    if inv_mat[i, r] > 0:
+                        continue
+
+                    # RULE 3: Player B must have a duplicate of requested card (count >= 2)[cite: 1]
+                    if inv_mat[j, r] < 2:
+                        continue
+
+                    r_info = catalog[all_cards[r]]
+
+                    # RULE 4 & 5: Same card type + Player B can accept duplicate or unowned[cite: 1]
+                    if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
+                        candidates.append((i, j, g, r))
+
+    return candidates
+
+
 def generate_recommendations(inv, catalog, player_cols, all_cards):
     """
-    Simulates recommendations across ALL candidate cards (Full Search Depth restored).
+    Simulates recommendations across candidate cards when no direct trades exist.
+    Evaluates +1 simulated card addition and evaluates multi-step trade cascades.
     """
     num_players, num_cards = inv.shape
 
-    # Evaluate any player receiving any card to see if it triggers multi-step chain trades
     candidate_pairs = []
     for i in range(num_players):
         if inv[i].sum() == 0:
@@ -574,21 +624,8 @@ def generate_recommendations(inv, catalog, player_cols, all_cards):
         inv_sim = inv.copy()
         inv_sim[i, c_idx] += 1
 
-        sim_candidates = []
-        for p1 in range(num_players):
-            for p2 in range(num_players):
-                if p1 == p2:
-                    continue
-                for g in range(num_cards):
-                    if inv_sim[p1, g] < 2:
-                        continue
-                    g_info = catalog[all_cards[g]]
-                    for r in range(num_cards):
-                        if inv_sim[p2, r] < 2:
-                            continue
-                        r_info = catalog[all_cards[r]]
-                        if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
-                            sim_candidates.append((p1, p2, g, r))
+        # Candidate generation adheres strictly to trade rules[cite: 1]
+        sim_candidates = generate_candidate_trades(inv_sim, catalog, all_cards, num_players, num_cards)
 
         num_sim_candidates = len(sim_candidates)
         if num_sim_candidates == 0:
@@ -683,12 +720,29 @@ def run_optimization(data_df):
 
     player_cols = [c for c in data_df.columns if c not in [card_col, type_col]]
 
+    # Comprehensive list of Super Troops
+    SUPER_TROOPS_LIST = [
+        "Ice Hound", "Inferno Dragon", "Rocket Balloon", "Super Archer", 
+        "Super Barbarian", "Super Bowler", "Super Dragon", "Super Giant", 
+        "Super Hog Rider", "Super Miner", "Super Minion", "Super Valkyrie", 
+        "Super Wall Breaker", "Super Witch", "Super Wizard", "Super Yeti"
+    ]
+
     catalog = {}
     for _, row in data_df.iterrows():
-        name = str(row[card_col])
+        name = str(row[card_col]).strip()
+        
+        # Override card classification logic for Super Troops
+        if any(s.lower() == name.lower() for s in SUPER_TROOPS_LIST):
+            card_type = "Super Troops"
+            is_super = True
+        else:
+            card_type = str(row[type_col])
+            is_super = "super" in name.lower()
+
         catalog[name] = {
-            "Type": str(row[type_col]),
-            "IsSuper": "super" in name.lower()
+            "Type": card_type,
+            "IsSuper": is_super
         }
 
     all_cards = list(catalog.keys())
@@ -704,21 +758,8 @@ def run_optimization(data_df):
             except:
                 inv[p_idx, c_idx] = 0
 
-    candidates = []
-    for i in range(num_players):
-        for j in range(num_players):
-            if i == j: 
-                continue
-            for g in range(num_cards):
-                if inv[i, g] < 2: 
-                    continue
-                g_info = catalog[all_cards[g]]
-                for r in range(num_cards):
-                    if inv[j, r] < 2: 
-                        continue
-                    r_info = catalog[all_cards[r]]
-                    if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
-                        candidates.append((i, j, g, r))
+    # Generate candidates with updated strict business rules
+    candidates = generate_candidate_trades(inv, catalog, all_cards, num_players, num_cards)
 
     num_candidates = len(candidates)
     recs = generate_recommendations(inv, catalog, player_cols, all_cards)
