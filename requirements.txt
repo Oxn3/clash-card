@@ -4,3 +4,4 @@ numpy
 scipy
 gspread
 google-auth
+openpyxl
