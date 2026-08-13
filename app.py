@@ -385,7 +385,6 @@ for _, row in live_df.iterrows():
         except ValueError:
             pass
 
-st.sidebar.divider()
 st.sidebar.subheader("📊 Clan Stats")
 
 # --- UI DISPLAY: METRICS GRID ---
