@@ -552,163 +552,122 @@ def build_sparse_matrix(num_players, num_cards, inv_mat, candidates):
 
 
 def generate_candidate_trades(inv_mat, catalog, all_cards, num_players, num_cards):
-    # Group card indices by type
     type_card_indices = {}
     for c_idx, c_name in enumerate(all_cards):
-        c_type = catalog[c_name]["Type"]
+        c_info = catalog.get(c_name, {"Type": "Unknown", "IsSuper": False})
+        c_type = c_info["Type"]
         type_card_indices.setdefault(c_type, []).append(c_idx)
 
-    # RULE 6: Track players with 100% collection for a specific card type
+    # Track players with 100% true collection for a specific card type
     player_completed_types = {p_idx: set() for p_idx in range(num_players)}
     for p_idx in range(num_players):
         for c_type, indices_list in type_card_indices.items():
+            # True set completion check: Player must own >0 copies of ALL cards of this type
             if all(inv_mat[p_idx, c_i] > 0 for c_i in indices_list):
                 player_completed_types[p_idx].add(c_type)
 
     candidates = []
-    for i in range(num_players):
-        for j in range(num_players):
+    for i in range(num_players):         # Player A (Initiator)
+        for j in range(num_players):     # Player B (Partner)
             if i == j:
                 continue
 
             for g in range(num_cards):
-                # RULE 1: Player A must have a duplicate to give (count >= 2)[cite: 1]
+                # Player A must have a duplicate to give (>= 2)
                 if inv_mat[i, g] < 2:
                     continue
 
-                g_info = catalog[all_cards[g]]
+                g_info = catalog.get(all_cards[g], {"Type": "Unknown", "IsSuper": False})
                 card_type = g_info["Type"]
 
-                # RULE 6: Player A cannot initiate if 100% of that type is collected[cite: 1]
+                # RULE 6: Player A cannot initiate if 100% of that type is collected
                 if card_type in player_completed_types[i]:
                     continue
 
                 for r in range(num_cards):
-                    # RULE 2: Player A must receive an UNOWNED card (count == 0)[cite: 1]
-                    if inv_mat[i, r] > 0:
+                    # RULE 2: Player A must receive an UNOWNED card (== 0)
+                    if inv_mat[i, r] != 0:
                         continue
 
-                    # RULE 3: Player B must have a duplicate of requested card (count >= 2)[cite: 1]
+                    # RULE 3: Player B must have a duplicate of requested card (>= 2)
                     if inv_mat[j, r] < 2:
                         continue
 
-                    r_info = catalog[all_cards[r]]
+                    r_info = catalog.get(all_cards[r], {"Type": "Unknown", "IsSuper": False})
 
-                    # RULE 4 & 5: Same card type + Player B can accept duplicate or unowned[cite: 1]
+                    # RULE 4 & 5: Same card type + Player B can accept duplicate OR unowned
                     if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
                         candidates.append((i, j, g, r))
 
     return candidates
 
 
-def generate_recommendations(inv, catalog, player_cols, all_cards):
-    """
-    Simulates recommendations across candidate cards when no direct trades exist.
-    Evaluates +1 simulated card addition and evaluates multi-step trade cascades.
-    """
-    num_players, num_cards = inv.shape
+def generate_recommendations(inv_mat, catalog, all_cards, player_names):
+    num_players, num_cards = inv_mat.shape
+    recommendations = []
+    seen_recommendations = set()
 
-    candidate_pairs = []
-    for i in range(num_players):
-        if inv[i].sum() == 0:
-            continue
-        for c_idx in range(num_cards):
-            if inv[i, c_idx] <= 1:
-                candidate_pairs.append((i, c_idx))
+    # 1. Loop through every player who has unowned cards (Initiator)
+    for p_initiator in range(num_players):
+        unowned_card_indices = np.where(inv_mat[p_initiator] == 0)[0]
 
-    if not candidate_pairs:
-        return []
+        # Loop through each of their unowned cards
+        for c_idx in unowned_card_indices:
+            card_req = all_cards[c_idx]
+            req_info = catalog.get(card_req, {"Type": "Unknown", "IsSuper": False})
 
-    def eval_candidate(cand):
-        i, c_idx = cand
-        inv_sim = inv.copy()
-        inv_sim[i, c_idx] += 1
+            # 2. Look for ANY other player with exactly 1 copy (Partner)
+            for p_partner in range(num_players):
+                if p_initiator == p_partner:
+                    continue
 
-        # Candidate generation adheres strictly to trade rules[cite: 1]
-        sim_candidates = generate_candidate_trades(inv_sim, catalog, all_cards, num_players, num_cards)
+                if inv_mat[p_partner, c_idx] == 1:
+                    rec_key = (player_names[p_partner], card_req)
+                    if rec_key in seen_recommendations:
+                        continue
 
-        num_sim_candidates = len(sim_candidates)
-        if num_sim_candidates == 0:
-            return None
+                    # 3. Simulate +1 copy on the partner
+                    inv_sim = inv_mat.copy()
+                    inv_sim[p_partner, c_idx] += 1
 
-        c_obj = np.zeros(num_sim_candidates)
-        for idx, (p1, p2, g, r) in enumerate(sim_candidates):
-            is_super = catalog[all_cards[g]]["IsSuper"]
-            p1_unowned_gain = 1 if inv[p1, r] == 0 else 0
-            p2_unowned_gain = 1 if inv[p2, g] == 0 else 0
-            total_unowned = p1_unowned_gain + p2_unowned_gain
-            
-            if total_unowned > 0:
-                c_obj[idx] = -(1000 * total_unowned + (25 if is_super else 0))
-            else:
-                c_obj[idx] = 1.0
+                    # 4. Check: Does p_initiator have ANY duplicate to give back?
+                    valid_give_found = False
+                    for g_idx in range(num_cards):
+                        if inv_sim[p_initiator, g_idx] >= 2:
+                            give_card = all_cards[g_idx]
+                            give_info = catalog.get(give_card, {"Type": "Unknown", "IsSuper": False})
 
-        A_csc, b_l, b_u = build_sparse_matrix(num_players, num_cards, inv_sim, sim_candidates)
-        constraints = LinearConstraint(A_csc, b_l, b_u)
-        integrality = np.ones(num_sim_candidates)
-        bounds = Bounds(lb=0, ub=1)
+                            # Matching type and super condition
+                            if (give_info["Type"] == req_info["Type"] and 
+                                give_info["IsSuper"] == req_info["IsSuper"]):
 
-        res = milp(
-            c=c_obj, 
-            integrality=integrality, 
-            bounds=bounds, 
-            constraints=constraints,
-            options={'mip_rel_gap': 0.01}
-        )
+                                # Calculate actual benefit:
+                                # Initiator gains 1 unowned card (card_req).
+                                # Check if Partner also gains an unowned card (give_card):
+                                partner_gained_unowned = 1 if inv_mat[p_partner, g_idx] == 0 else 0
+                                
+                                total_cards_gained = 1 + partner_gained_unowned
+                                players_benefited = 2 if partner_gained_unowned == 1 else 1
 
-        if res.success and res.x is not None:
-            chosen_indices = np.where(res.x > 0.5)[0]
-            trades_unlocked = len(chosen_indices)
+                                recommendations.append({
+                                    "Player": player_names[p_partner],
+                                    "Target Card": card_req,
+                                    "Type": req_info["Type"],
+                                    "Cards Gained": total_cards_gained,
+                                    "Players Benefited": players_benefited,
+                                    "Trades Unlocked": 1,
+                                    "Trade Chain": [
+                                        f"👤 {player_names[p_initiator]} gives {give_card} ➡️ gets {card_req} from 👤 {player_names[p_partner]}"
+                                    ]
+                                })
+                                seen_recommendations.add(rec_key)
+                                valid_give_found = True
+                                break # Stop checking give options once a valid trade is formed
 
-            if trades_unlocked > 0:
-                curr_state_mat = inv_sim.copy()
-                trade_chain_details = []
+                    if valid_give_found:
+                        break # Stop checking other partners for this card once recorded
 
-                for step, idx in enumerate(chosen_indices, 1):
-                    p1, p2, g, r = sim_candidates[idx]
-                    curr_state_mat[p1, g] -= 1
-                    curr_state_mat[p1, r] += 1
-                    curr_state_mat[p2, r] -= 1
-                    curr_state_mat[p2, g] += 1
-
-                    trade_chain_details.append(
-                        f"Step {step}: {player_cols[p1]} trades [{all_cards[g]}] with {player_cols[p2]} for [{all_cards[r]}]"
-                    )
-
-                benefited_players = set()
-                unowned_cards_gained = 0
-
-                for p_idx in range(num_players):
-                    player_unowned_count = 0
-                    for c_i in range(num_cards):
-                        if inv[p_idx, c_i] == 0 and curr_state_mat[p_idx, c_i] > 0:
-                            unowned_cards_gained += 1
-                            player_unowned_count += 1
-                    
-                    if player_unowned_count > 0:
-                        benefited_players.add(player_cols[p_idx])
-
-                if unowned_cards_gained > 0:
-                    return {
-                        "Player": player_cols[i],
-                        "Target Card": all_cards[c_idx],
-                        "Type": catalog[all_cards[c_idx]]["Type"],
-                        "Cards Gained": unowned_cards_gained,
-                        "Players Benefited": len(benefited_players),
-                        "Trades Unlocked": trades_unlocked,
-                        "Trade Chain": trade_chain_details
-                    }
-        return None
-
-    recs = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        results = executor.map(eval_candidate, candidate_pairs)
-        for r in results:
-            if r is not None:
-                recs.append(r)
-
-    recs.sort(key=lambda x: (x["Cards Gained"], x["Trades Unlocked"]), reverse=True)
-    return recs[:10]
+    return recommendations
 
 
 def run_optimization(data_df):
@@ -730,14 +689,18 @@ def run_optimization(data_df):
 
     catalog = {}
     for _, row in data_df.iterrows():
-        name = str(row[card_col]).strip()
+        raw_name = str(row[card_col])
+        if pd.isna(raw_name) or not raw_name.strip():
+            continue
+            
+        name = raw_name.strip()
         
         # Override card classification logic for Super Troops
         if any(s.lower() == name.lower() for s in SUPER_TROOPS_LIST):
             card_type = "Super Troops"
             is_super = True
         else:
-            card_type = str(row[type_col])
+            card_type = str(row[type_col]).strip()
             is_super = "super" in name.lower()
 
         catalog[name] = {
@@ -745,6 +708,7 @@ def run_optimization(data_df):
             "IsSuper": is_super
         }
 
+    # Derive strictly from catalog keys to guarantee 100% string alignment
     all_cards = list(catalog.keys())
     num_players = len(player_cols)
     num_cards = len(all_cards)
@@ -752,17 +716,18 @@ def run_optimization(data_df):
     inv = np.zeros((num_players, num_cards), dtype=int)
     for p_idx, p in enumerate(player_cols):
         for c_idx, c in enumerate(all_cards):
-            val = data_df.loc[data_df[card_col] == c, p].values
+            val = data_df.loc[data_df[card_col].astype(str).str.strip() == c, p].values
             try:
                 inv[p_idx, c_idx] = int(val[0]) if len(val) > 0 and pd.notnull(val[0]) else 0
-            except:
+            except Exception:
                 inv[p_idx, c_idx] = 0
 
     # Generate candidates with updated strict business rules
     candidates = generate_candidate_trades(inv, catalog, all_cards, num_players, num_cards)
 
     num_candidates = len(candidates)
-    recs = generate_recommendations(inv, catalog, player_cols, all_cards)
+    # Pass arguments in exact expected order: (inv_mat, catalog, all_cards, player_names)
+    recs = generate_recommendations(inv, catalog, all_cards, player_cols)
 
     if num_candidates == 0:
         curr_state = {p: {c: int(inv[p_idx, c_idx]) for c_idx, c in enumerate(all_cards)} for p_idx, p in enumerate(player_cols)}
@@ -771,7 +736,8 @@ def run_optimization(data_df):
 
     c_obj = np.zeros(num_candidates)
     for idx, (i, j, g, r) in enumerate(candidates):
-        is_super = catalog[all_cards[g]]["IsSuper"]
+        g_info = catalog.get(all_cards[g], {"Type": "Unknown", "IsSuper": False})
+        is_super = g_info["IsSuper"]
         
         i_gains_unowned = 1 if inv[i, r] == 0 else 0
         j_gains_unowned = 1 if inv[j, g] == 0 else 0
@@ -808,12 +774,13 @@ def run_optimization(data_df):
             curr_state_mat[j, r] -= 1
             curr_state_mat[j, g] += 1
 
+            g_info = catalog.get(all_cards[g], {"Type": "Unknown", "IsSuper": False})
             executed_trades.append({
                 "Initiator": player_cols[i],
                 "Partner": player_cols[j],
                 "Give": all_cards[g],
                 "Receive": all_cards[r],
-                "Type": catalog[all_cards[g]]["Type"]
+                "Type": g_info["Type"]
             })
 
     curr_state = {}
@@ -845,7 +812,7 @@ def run_optimization(data_df):
     updated_df = data_df.copy()
     for p in player_cols:
         for idx, row in updated_df.iterrows():
-            card_name = str(row[card_col])
+            card_name = str(row[card_col]).strip()
             updated_df.at[idx, p] = curr_state[p].get(card_name, row[p])
 
     return sol, recs, player_cols, updated_df, card_col
@@ -879,8 +846,8 @@ if st.session_state.active_trade is not None:
     with btn_col1:
         if st.button("✅ Confirm Trade Success", type="primary", use_container_width=True):
             with st.spinner("Processing and updating trade inventory..."):
-                init_give_idx = edited_df[edited_df[card_col] == give].index
-                init_rec_idx = edited_df[edited_df[card_col] == rec].index
+                init_give_idx = edited_df[edited_df[card_col].astype(str).str.strip() == give].index
+                init_rec_idx = edited_df[edited_df[card_col].astype(str).str.strip() == rec].index
 
                 init_had_before = int(edited_df.loc[init_rec_idx, init].values[0]) if not init_rec_idx.empty else 0
                 part_had_before = int(edited_df.loc[init_give_idx, part].values[0]) if not init_give_idx.empty else 0
@@ -1077,8 +1044,8 @@ if (
             give_card = trade["Give"]
             rec_card = trade["Receive"]
 
-            give_row = edited_df[edited_df[card_col_name] == give_card]
-            rec_row = edited_df[edited_df[card_col_name] == rec_card]
+            give_row = edited_df[edited_df[card_col_name].astype(str).str.strip() == give_card]
+            rec_row = edited_df[edited_df[card_col_name].astype(str).str.strip() == rec_card]
 
             p2_give_count = (
                 int(give_row[p2].values[0])
