@@ -871,46 +871,36 @@ if st.session_state.stage_1_results is not None and st.session_state.active_trad
     st.subheader("⚡ Stage 1: Active Trade Sequence")
 
     sol_s1 = st.session_state.stage_1_results["sol"]
-    m1, m2, m3 = st.columns(3)
+    
+    # --- CALCULATE TOP BENEFITED PLAYER FROM STAGE 1 TRADES ---
+    player_gains_s1 = {}
+    
+    # Iterate directly over executed_trades in sol_s1["trades"]
+    for trade in sol_s1.get("trades", []):
+        p1 = trade.get("Initiator")
+        p2 = trade.get("Partner")
+        
+        # Each trade gives 1 new missing card to each participating player
+        if p1:
+            player_gains_s1[str(p1)] = player_gains_s1.get(str(p1), 0) + 1
+        if p2:
+            player_gains_s1[str(p2)] = player_gains_s1.get(str(p2), 0) + 1
+
+    top_player_s1 = "None"
+    top_gain_s1 = 0
+    if player_gains_s1:
+        top_player_s1 = max(player_gains_s1, key=player_gains_s1.get)
+        top_gain_s1 = player_gains_s1[top_player_s1]
+
+    # --- UI DISPLAY: 4 COLUMNS ---
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Trades", len(sol_s1["trades"]))
     m2.metric("Missing Cards Gained", sol_s1["missing"])
     m3.metric("Players Benefited", sol_s1["players"])
+    m4.metric(f"🏆 {top_player_s1}", f"+{top_gain_s1} cards")
 
     st.write("")
     render_trade_table(st.session_state.stage_1_results, stage_num=1, can_initiate=True)
-
-    # --- STAGE 2 TRADES ---
-    if len(sol_s1["trades"]) > 0:
-        st.divider()
-        if st.session_state.stage_2_results is None:
-            st.subheader("🔄 Future Projection: Stage 2")
-            st.caption("Calculate downstream options based on projected inventory after Stage 1 finishes.")
-            
-            if st.button("⚡ Run Stage 2 Optimization", type="secondary"):
-                with st.spinner("Calculating Stage 2 optimization..."):
-                    updated_df_s1 = st.session_state.stage_1_results["updated_df"]
-                    sol_s2, recs_s2, players_s2, updated_df_s2, card_col_s2 = run_optimization(updated_df_s1)
-                    
-                    st.session_state.stage_2_results = {
-                        "sol": sol_s2, 
-                        "recs": recs_s2, 
-                        "players": players_s2, 
-                        "updated_df": updated_df_s2, 
-                        "card_col": card_col_s2
-                    }
-                    st.rerun()
-        else:
-            st.subheader("🔮 Stage 2: Projected Follow-Up Trades")
-            st.caption("These trades unlock *after* all Stage 1 trades are completed.")
-            
-            sol_s2 = st.session_state.stage_2_results["sol"]
-            s2_m1, s2_m2, s2_m3 = st.columns(3)
-            s2_m1.metric("Stage 2 Trades", len(sol_s2["trades"]))
-            s2_m2.metric("Additional Cards Gained", sol_s2["missing"])
-            s2_m3.metric("Players Benefited", sol_s2["players"])
-            
-            st.write("")
-            render_trade_table(st.session_state.stage_2_results, stage_num=2, can_initiate=False)
 
     # --- UNLOCKABLE RECOMMENDATIONS TABLE ---
     current_recs = st.session_state.stage_2_results["recs"] if (st.session_state.stage_2_results and len(sol_s1["trades"]) > 0) else st.session_state.stage_1_results["recs"]
