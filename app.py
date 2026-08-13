@@ -407,11 +407,61 @@ with row3_col1:
 with row3_col2:
     st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
 
-with st.sidebar.expander("📦 Surplus Duplicates Breakdown", expanded=True):
-    st.caption("Total extra card copies available for trade across all players:")
-    st.write(f"💧 **Elixir:** `{dup_elixir}`")
-    st.write(f"🖤 **Dark Elixir:** `{dup_dark_elixir}`")
-    st.write(f"🔨 **Builder Base:** `{dup_builder_elixir}`")
+# --- CALCULATE DUPLICATES & UNIQUE MISSING PER TYPE ---
+dup_elixir = 0
+dup_dark_elixir = 0
+dup_builder_elixir = 0
+
+missing_elixir = 0
+missing_dark_elixir = 0
+missing_builder_elixir = 0
+
+for _, row in live_df.iterrows():
+    r_type = str(row[type_col]).strip().lower()
+    
+    # Check if ALL players are missing this specific card (0 copies across entire clan)
+    all_missing = all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
+    if all_missing:
+        if "builder" in r_type:
+            missing_builder_elixir += 1
+        elif "dark" in r_type:
+            missing_dark_elixir += 1
+        elif "elixir" in r_type:
+            missing_elixir += 1
+
+    # Calculate total extra trade duplicates across players
+    for p in player_cols:
+        try:
+            val = int(row[p]) if pd.notnull(row[p]) else 0
+            dups = max(0, val - 1)
+            
+            if "builder" in r_type:
+                dup_builder_elixir += dups
+            elif "dark" in r_type:
+                dup_dark_elixir += dups
+            elif "elixir" in r_type:
+                dup_elixir += dups
+        except ValueError:
+            pass
+
+# --- UI DISPLAY: 2-COLUMN BREAKDOWN STRICTLY INSIDE EXPANDER ---
+with st.sidebar.expander("📦 Clan Card Breakdown", expanded=True) as breakdown_expander:
+    # Use breakdown_expander.columns instead of st.sidebar.columns!
+    col_dup, col_miss = breakdown_expander.columns(2)
+    
+    with col_dup:
+        st.markdown("**🔄 Duplicates**")
+        st.caption("Extra copies")
+        st.write(f"💧 Elixir: `{dup_elixir}`")
+        st.write(f"🖤 Dark: `{dup_dark_elixir}`")
+        st.write(f"🔨 Builder: `{dup_builder_elixir}`")
+
+    with col_miss:
+        st.markdown("**❌ Missing**")
+        st.caption("Extinct cards")
+        st.write(f"💧 Elixir: `{missing_elixir}`")
+        st.write(f"🖤 Dark: `{missing_dark_elixir}`")
+        st.write(f"🔨 Builder: `{missing_builder_elixir}`")
 
 # --- MAIN PAGE CONTINUES ---
 col_title, _, col_refresh = st.columns([2.5, 1.0, 0.8], vertical_alignment="center")
