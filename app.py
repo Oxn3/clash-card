@@ -275,19 +275,8 @@ if not st.session_state.authenticated:
 
 # --- IF AUTHENTICATED ---
 st.sidebar.success(f"🟢 Connected: **{st.session_state.clan_tag}**")
-st.sidebar.info(f"👤 Player: **{st.session_state.player_name}**")
 
-if st.sidebar.button("🔒 Logout"):
-    st.session_state.authenticated = False
-    st.session_state.player_name = None
-    st.session_state.stage_1_results = None
-    st.session_state.stage_2_results = None
-    st.session_state.active_trade = None
-    st.rerun()
-
-st.sidebar.divider()
-
-# --- 7. SAFE REFRESH & LIVE DATA LOAD ---
+# Load live data early so player_cols is accessible for sidebar setup
 try:
     with st.spinner("Syncing card inventory..."):
         live_df = fetch_sheet_direct(st.session_state.sheet_url)
@@ -295,7 +284,7 @@ except Exception:
     st.error("⚠️ System temporarily offline. Unable to retrieve live inventory.")
     st.stop()
 
-# --- 7. SIDEBAR ANALYTICAL DASHBOARD ---
+# Extract metadata & player columns early
 card_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
 card_col = card_matches[0] if card_matches else live_df.columns[0]
 
@@ -304,6 +293,37 @@ type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
+# Placed Player Name and Summary Toggle side-by-side
+side_p_col, side_t_col = st.sidebar.columns([1.2, 1], vertical_alignment="center")
+
+with side_p_col:
+    st.markdown(f"👤 **{st.session_state.player_name}**")
+
+with side_t_col:
+    show_player_summary = st.toggle("📊 Report", value=False)
+
+if st.sidebar.button("🔒 Logout", use_container_width=True):
+    st.session_state.authenticated = False
+    st.session_state.player_name = None
+    st.session_state.stage_1_results = None
+    st.session_state.stage_2_results = None
+    st.session_state.active_trade = None
+    st.rerun()
+
+# Dynamic Player Selector under header if report is active
+selected_summary_players = []
+if show_player_summary:
+    st.sidebar.markdown("---")
+    default_summary = [st.session_state.player_name] if st.session_state.player_name in player_cols else player_cols
+    selected_summary_players = st.sidebar.multiselect(
+        "👥 Select Player(s) to View:",
+        options=player_cols,
+        default=default_summary
+    )
+
+st.sidebar.divider()
+
+# --- 7. SIDEBAR ANALYTICAL DASHBOARD ---
 total_players = len(player_cols)
 completed_players_count = sum(
     1 for p in player_cols 
@@ -382,21 +402,18 @@ with row1_col1:
 with row1_col2:
     st.metric("🎉 Cards Gained", cards_gained_count)
 
-# Row 2: Event Progress & Top Collector
 row2_col1, row2_col2 = st.sidebar.columns(2)
 with row2_col1:
     st.metric("✅ Completed Event", f"{completed_players_count} / {total_players}")
 with row2_col2:
     st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
 
-# Row 3: Grouped Inventory Gap Metrics (Unique Missing + Total Missing Slots)
 row3_col1, row3_col2 = st.sidebar.columns(2)
 with row3_col1:
     st.metric("❌ Unique Missing", f"{unique_missing_cards} / {total_cards_in_catalog}")
 with row3_col2:
     st.metric("🎯 Total Missing Slots", total_missing_slots)
 
-# Breakdowns by Resource Group
 dup_by_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
 missing_by_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
 
@@ -410,11 +427,9 @@ for _, row in live_df.iterrows():
         except (ValueError, TypeError):
             val = 0
 
-        # Count total missing slots across all players
         if val == 0:
             if r_rarity in missing_by_rarity:
                 missing_by_rarity[r_rarity] += 1
-        # Count total duplicate copies available for trade (count > 1)
         elif val > 1:
             if r_rarity in dup_by_rarity:
                 dup_by_rarity[r_rarity] += (val - 1)
@@ -436,7 +451,81 @@ with st.sidebar.expander("📦 Clan Card Breakdown", expanded=True) as breakdown
         st.write(f"🟡 Builder Elixir: `{missing_by_rarity['Builder Elixir']}`")
         st.write(f"⚡ Super Troops: `{missing_by_rarity['Super Troop']}`")
 
-# --- MAIN PAGE ---
+# --- PLAYER SUMMARY REPORT SECTION (MOVED TO TOP OF PAGE) ---
+if show_player_summary:
+    st.subheader("👤 Individual Player Summary Report")
+    
+    if not selected_summary_players:
+        st.info("💡 Please select at least one player in the sidebar under the report options.")
+    else:
+        for p in selected_summary_players:
+            with st.expander(f"📊 Detailed Report: **{p}**", expanded=True):
+                p_inv = pd.to_numeric(live_df[p], errors='coerce').fillna(0).astype(int)
+                
+                total_catalog = len(live_df)
+                owned_cards = (p_inv > 0).sum()
+                missing_cards = (p_inv == 0).sum()
+                total_duplicates = (p_inv.apply(lambda x: max(0, x - 1))).sum()
+                is_completed = missing_cards == 0
+
+                # Summary Metrics Row
+                m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+                m_col1.metric("Owned Cards", f"{owned_cards} / {total_catalog}")
+                m_col2.metric("Duplicates Available", total_duplicates)
+                m_col3.metric("Missing Cards", missing_cards)
+                m_col4.metric("Status", "🎉 Completed!" if is_completed else "⏳ In Progress")
+
+                st.markdown("---")
+
+                # Detailed Breakdown By Group for this Player
+                p_dup_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
+                p_missing_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
+                
+                p_missing_list = []
+                p_dup_list = []
+
+                for _, row in live_df.iterrows():
+                    c_name = str(row[card_col]).strip()
+                    c_rarity = CARD_RARITY_MAP.get(c_name, str(row[type_col]).strip())
+                    val = int(pd.to_numeric(row[p], errors='coerce')) if pd.notnull(row[p]) else 0
+
+                    if val == 0:
+                        if c_rarity in p_missing_rarity:
+                            p_missing_rarity[c_rarity] += 1
+                        p_missing_list.append((c_name, c_rarity))
+                    elif val > 1:
+                        if c_rarity in p_dup_rarity:
+                            p_dup_rarity[c_rarity] += (val - 1)
+                        p_dup_list.append((c_name, c_rarity, val - 1))
+
+                c_left, c_right = st.columns(2)
+
+                with c_left:
+                    st.markdown("#### 🔄 Spare Duplicates for Trade")
+                    st.write(f"🟣 Elixir: `{p_dup_rarity['Elixir']}` | ⬛ Dark Elixir: `{p_dup_rarity['Dark Elixir']}`")
+                    st.write(f"🟡 Builder Elixir: `{p_dup_rarity['Builder Elixir']}` | ⚡ Super Troops: `{p_dup_rarity['Super Troop']}`")
+                    
+                    if p_dup_list:
+                        with st.expander("📋 View Duplicate Cards List"):
+                            for item_name, item_rarity, extra in p_dup_list:
+                                st.write(f"• **{item_name}** (`{item_rarity}`): +{extra} extra")
+                    else:
+                        st.caption("No spare duplicates currently.")
+
+                with c_right:
+                    st.markdown("#### ❌ Missing Cards Needed")
+                    st.write(f"🟣 Elixir: `{p_missing_rarity['Elixir']}` | ⬛ Dark Elixir: `{p_missing_rarity['Dark Elixir']}`")
+                    st.write(f"🟡 Builder Elixir: `{p_missing_rarity['Builder Elixir']}` | ⚡ Super Troops: `{p_missing_rarity['Super Troop']}`")
+                    
+                    if p_missing_list:
+                        with st.expander("📋 View Missing Cards List"):
+                            for item_name, item_rarity in p_missing_list:
+                                st.write(f"• **{item_name}** (`{item_rarity}`)")
+                    else:
+                        st.caption("🎉 Player owns all cards!")
+    st.divider()
+
+# --- MAIN PAGE INVENTORY GRID ---
 col_title, _, col_refresh = st.columns([2.5, 1.0, 0.8], vertical_alignment="center")
 
 with col_title:
@@ -551,24 +640,20 @@ def generate_candidate_trades(inv_mat, catalog, all_cards, num_players, num_card
                 continue
 
             for g in range(num_cards):
-                # RULE 1: Player A must have at least 1 extra duplicate to give (>= 2)
                 if inv_mat[i, g] < 2:
                     continue
 
                 g_info = catalog.get(all_cards[g], {"Rarity": "Unknown"})
 
                 for r in range(num_cards):
-                    # RULE 2: Player A MUST NOT own the requested card (== 0)
                     if inv_mat[i, r] != 0:
                         continue
 
-                    # RULE 3: Player B must have at least 1 duplicate of requested card (>= 2)
                     if inv_mat[j, r] < 2:
                         continue
 
                     r_info = catalog.get(all_cards[r], {"Rarity": "Unknown"})
 
-                    # RULE 4: Both troops MUST belong to the EXACT same Resource Group
                     if g_info["Rarity"] == r_info["Rarity"]:
                         candidates.append((i, j, g, r))
 
