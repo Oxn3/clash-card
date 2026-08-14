@@ -10,7 +10,6 @@ import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
 from scipy.sparse import csc_matrix
 import streamlit.components.v1 as components
-from concurrent.futures import ThreadPoolExecutor
 
 # Set global default timeout for all network requests to 5 seconds
 socket.setdefaulttimeout(5)
@@ -56,10 +55,10 @@ def get_gspread_client():
         st.error("❌ Authentication Error: Invalid service account configuration.")
         st.stop()
 
-# --- DIRECT GSPREAD LOADER (Bypasses GSheetsConnection hanging issues) ---
+# --- DIRECT GSPREAD LOADER ---
 @st.cache_data(ttl=10)
 def fetch_sheet_direct(url):
-    """Directly fetches sheet data using gspread to prevent GSheetsConnection from hanging."""
+    """Directly fetches sheet data using gspread to prevent GSheetsConnection hanging."""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(url)
@@ -81,6 +80,35 @@ if "stage_2_results" not in st.session_state:
     st.session_state.stage_2_results = None
 if "active_trade" not in st.session_state:
     st.session_state.active_trade = None
+
+# --- OFFICIAL CLASH RESOURCE & GROUP MAPPING ---
+CARD_RARITY_MAP = {
+    # 🟣 Home Village Elixir
+    "Barbarian": "Elixir", "Archer": "Elixir", "Giant": "Elixir", "Goblin": "Elixir",
+    "Wall Breaker": "Elixir", "Balloon": "Elixir", "Wizard": "Elixir", "Healer": "Elixir",
+    "Dragon": "Elixir", "P.E.K.K.A": "Elixir", "P.E.K.K.A.": "Elixir", "Baby Dragon": "Elixir", 
+    "Miner": "Elixir", "Electro Dragon": "Elixir", "Yeti": "Elixir", "Dragon Rider": "Elixir", 
+    "Electro Titan": "Elixir", "Root Rider": "Elixir", "Meteor Golem": "Elixir",
+    
+    # ⬛ Home Village Dark Elixir
+    "Minion": "Dark Elixir", "Hog Rider": "Dark Elixir", "Valkyrie": "Dark Elixir", 
+    "Golem": "Dark Elixir", "Witch": "Dark Elixir", "Lava Hound": "Dark Elixir", 
+    "Bowler": "Dark Elixir", "Ice Golem": "Dark Elixir", "Headhunter": "Dark Elixir", 
+    "Apprentice Warden": "Dark Elixir", "Druid": "Dark Elixir", "Thrower": "Dark Elixir",
+
+    # 🟡 Builder Base Elixir
+    "Raged Barbarian": "Builder Elixir", "Sneaky Archer": "Builder Elixir", "Boxer Giant": "Builder Elixir",
+    "Beta Minion": "Builder Elixir", "Bomber": "Builder Elixir", "Baby Dragon (Builder Base)": "Builder Elixir",
+    "Night Witch": "Builder Elixir", "Drop Ship": "Builder Elixir", "Power P.E.K.K.A": "Builder Elixir",
+    "Hog Glider": "Builder Elixir", "Electro Fire Wizard": "Builder Elixir",
+
+    # ⚡ Super Troops (COMPLETELY INDEPENDENT GROUP)
+    "Super Barbarian": "Super Troop", "Super Archer": "Super Troop", "Super Giant": "Super Troop",
+    "Sneaky Goblin": "Super Troop", "Super Wall Breaker": "Super Troop", "Rocket Balloon": "Super Troop",
+    "Super Wizard": "Super Troop", "Super Dragon": "Super Troop", "Inferno Dragon": "Super Troop",
+    "Super Minion": "Super Troop", "Super Valkyrie": "Super Troop", "Super Witch": "Super Troop",
+    "Ice Hound": "Super Troop", "Super Bowler": "Super Troop", "Super Hog Rider": "Super Troop"
+}
 
 # --- 5. HELPER FUNCTIONS ---
 def validate_inputs(tag, p_name, pwd):
@@ -120,41 +148,19 @@ def validate_player_data(clan_df, player_col):
 
 def generate_excel_template():
     troops = [
-        ('Raged Barbarian', 'Builder Elixir'), ('Sneaky Archer', 'Builder Elixir'),
-        ('Boxer Giant', 'Builder Elixir'), ('Beta Minion', 'Builder Elixir'),
-        ('Bomber', 'Builder Elixir'), ('Baby Dragon (Builder Base)', 'Builder Elixir'),
-        ('Cannon Cart', 'Builder Elixir'), ('Night Witch', 'Builder Elixir'),
-        ('Drop Ship', 'Builder Elixir'), ('Power P.E.K.K.A', 'Builder Elixir'),
-        ('Hog Glider', 'Builder Elixir'), ('Minion', 'Dark Elixir'),
-        ('Hog Rider', 'Dark Elixir'), ('Valkyrie', 'Dark Elixir'),
-        ('Golem', 'Dark Elixir'), ('Witch', 'Dark Elixir'),
-        ('Lava Hound', 'Dark Elixir'), ('Bowler', 'Dark Elixir'),
-        ('Ice Golem', 'Dark Elixir'), ('Headhunter', 'Dark Elixir'),
-        ('Apprentice Warden', 'Dark Elixir'), ('Druid', 'Dark Elixir'),
-        ('Furnace', 'Dark Elixir'), ('Ruin Witch', 'Dark Elixir'),
-        ('Super Minion', 'Dark Elixir'), ('Super Valkyrie', 'Dark Elixir'),
-        ('Super Witch', 'Dark Elixir'), ('Ice Hound', 'Dark Elixir'),
-        ('Super Bowler', 'Dark Elixir'), ('Super Hog Rider', 'Dark Elixir'),
-        ('Barbarian', 'Elixir'), ('Archer', 'Elixir'),
-        ('Giant', 'Elixir'), ('Goblin', 'Elixir'),
-        ('Wall Breaker', 'Elixir'), ('Balloon', 'Elixir'),
-        ('Wizard', 'Elixir'), ('Healer', 'Elixir'),
-        ('Dragon', 'Elixir'), ('P.E.K.K.A', 'Elixir'),
-        ('Baby Dragon', 'Elixir'), ('Miner', 'Elixir'),
-        ('Electro Dragon', 'Elixir'), ('Yeti', 'Elixir'),
-        ('Dragon Rider', 'Elixir'), ('Electro Titan', 'Elixir'),
-        ('Root Rider', 'Elixir'), ('Thrower', 'Elixir'),
-        ('Meteor Golem', 'Elixir'), ('Super Barbarian', 'Elixir'),
-        ('Super Archer', 'Elixir'), ('Super Giant', 'Elixir'),
-        ('Sneaky Goblin', 'Elixir'), ('Super Wall Breaker', 'Elixir'),
-        ('Rocket Balloon', 'Elixir'), ('Super Wizard', 'Elixir'),
-        ('Super Dragon', 'Elixir'), ('Inferno Dragon', 'Elixir'),
-        ('Super Miner', 'Elixir'), ('Super Yeti', 'Elixir')
+        ("Barbarian", "Elixir"), ("Archer", "Elixir"), ("Giant", "Elixir"), ("Goblin", "Elixir"),
+        ("Wall Breaker", "Elixir"), ("Balloon", "Elixir"), ("Wizard", "Elixir"), ("Healer", "Elixir"),
+        ("Dragon", "Elixir"), ("P.E.K.K.A", "Elixir"), ("Baby Dragon", "Elixir"), ("Miner", "Elixir"),
+        ("Meteor Golem", "Elixir"), ("Minion", "Dark Elixir"), ("Hog Rider", "Dark Elixir"), 
+        ("Valkyrie", "Dark Elixir"), ("Golem", "Dark Elixir"), ("Witch", "Dark Elixir"), 
+        ("Lava Hound", "Dark Elixir"), ("Bowler", "Dark Elixir"), ("Ice Golem", "Dark Elixir"),
+        ("Baby Dragon (Builder Base)", "Builder Elixir"), ("Hog Glider", "Builder Elixir"),
+        ("Super Barbarian", "Super Troop"), ("Rocket Balloon", "Super Troop"), ("Super Witch", "Super Troop")
     ]
     
     template_data = {
         "Troop Name": [t[0] for t in troops],
-        "Upgrade Resource": [t[1] for t in troops],
+        "Resource": [t[1] for t in troops],
         "Player 1": [0] * len(troops),
         "Player 2": [0] * len(troops),
         "Player 3": [0] * len(troops),
@@ -162,7 +168,6 @@ def generate_excel_template():
     }
     
     template_df = pd.DataFrame(template_data)
-    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         template_df.to_excel(writer, index=False, sheet_name="Sheet1")
@@ -189,7 +194,7 @@ if not st.session_state.authenticated:
     if existing_clan.empty and len(clan_tag_input) >= 3:
         st.sidebar.divider()
         st.sidebar.subheader("🆕 New Clan Registration")
-        st.sidebar.caption("Need a starting sheet? Download our template, upload it to your Google Drive as a Google Sheet, set sharing to 'Anyone with link can edit', and paste the URL below.")
+        st.sidebar.caption("Need a starting sheet? Download our template, upload it to Google Drive as a Google Sheet, set sharing to 'Anyone with link can edit', and paste URL below.")
         
         template_bytes = generate_excel_template()
         st.sidebar.download_button(
@@ -238,7 +243,7 @@ if not st.session_state.authenticated:
                         
                         card_matches = [c for c in clan_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
                         card_col = card_matches[0] if card_matches else clan_df.columns[0]
-                        type_matches = [c for c in clan_df.columns if any(k in str(c).lower() for k in ["type", "resource"])]
+                        type_matches = [c for c in clan_df.columns if any(k in str(c).lower() for k in ["type", "rarity", "resource"])]
                         type_col = type_matches[0] if type_matches else (clan_df.columns[1] if len(clan_df.columns) > 1 else clan_df.columns[0])
                         
                         player_cols = [str(c).strip() for c in clan_df.columns if c not in [card_col, type_col]]
@@ -294,23 +299,18 @@ except Exception:
 card_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
 card_col = card_matches[0] if card_matches else live_df.columns[0]
 
-type_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["type", "resource"])]
+type_matches = [c for c in live_df.columns if any(k in str(c).lower() for k in ["type", "rarity", "resource"])]
 type_col = type_matches[0] if type_matches else (live_df.columns[1] if len(live_df.columns) > 1 else live_df.columns[0])
 
 player_cols = [c for c in live_df.columns if c not in [card_col, type_col]]
 
-# --- CALCULATE COMPLETED VS INCOMPLETE PLAYERS ---
 total_players = len(player_cols)
-completed_players_count = 0
-
-for p in player_cols:
-    player_inventory = pd.to_numeric(live_df[p], errors='coerce').fillna(0)
-    if (player_inventory > 0).all():
-        completed_players_count += 1
-
+completed_players_count = sum(
+    1 for p in player_cols 
+    if (pd.to_numeric(live_df[p], errors='coerce').fillna(0) > 0).all()
+)
 incomplete_players_count = total_players - completed_players_count
 
-# Stats Analytics
 total_trades_count = 0
 cards_gained_count = 0
 player_gains = {}
@@ -361,15 +361,13 @@ if player_gains:
     top_player_count = player_gains[top_player_name]
 
 total_cards_in_catalog = len(live_df)
-unique_missing_cards = 0
-
-for _, row in live_df.iterrows():
-    if all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols):
-        unique_missing_cards += 1
+unique_missing_cards = sum(
+    1 for _, row in live_df.iterrows()
+    if all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
+)
 
 st.sidebar.subheader("📊 Clan Stats")
 
-# --- UI DISPLAY: METRICS GRID ---
 row1_col1, row1_col2 = st.sidebar.columns(2)
 with row1_col1:
     st.metric("🤝 Trades Done", total_trades_count)
@@ -388,60 +386,45 @@ with row3_col1:
 with row3_col2:
     st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
 
-# --- CALCULATE DUPLICATES & UNIQUE MISSING PER TYPE ---
-dup_elixir = 0
-dup_dark_elixir = 0
-dup_builder_elixir = 0
-
-missing_elixir = 0
-missing_dark_elixir = 0
-missing_builder_elixir = 0
+# Breakdowns by Resource Group
+dup_by_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
+missing_by_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
 
 for _, row in live_df.iterrows():
-    r_type = str(row[type_col]).strip().lower()
+    card_name = str(row[card_col]).strip()
+    r_rarity = CARD_RARITY_MAP.get(card_name, str(row[type_col]).strip())
     
     all_missing = all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
-    if all_missing:
-        if "builder" in r_type:
-            missing_builder_elixir += 1
-        elif "dark" in r_type:
-            missing_dark_elixir += 1
-        elif "elixir" in r_type:
-            missing_elixir += 1
+    if all_missing and r_rarity in missing_by_rarity:
+        missing_by_rarity[r_rarity] += 1
 
     for p in player_cols:
         try:
             val = int(row[p]) if pd.notnull(row[p]) else 0
             dups = max(0, val - 1)
-            
-            if "builder" in r_type:
-                dup_builder_elixir += dups
-            elif "dark" in r_type:
-                dup_dark_elixir += dups
-            elif "elixir" in r_type:
-                dup_elixir += dups
+            if r_rarity in dup_by_rarity:
+                dup_by_rarity[r_rarity] += dups
         except ValueError:
             pass
 
-# --- UI DISPLAY: 2-COLUMN BREAKDOWN STRICTLY INSIDE EXPANDER ---
 with st.sidebar.expander("📦 Clan Card Breakdown", expanded=True) as breakdown_expander:
     col_dup, col_miss = breakdown_expander.columns(2)
     
     with col_dup:
         st.markdown("**🔄 Duplicates**")
-        st.caption("Extra copies")
-        st.write(f"💧 Elixir: `{dup_elixir}`")
-        st.write(f"🖤 Dark: `{dup_dark_elixir}`")
-        st.write(f"🔨 Builder: `{dup_builder_elixir}`")
+        st.write(f"🟣 Elixir: `{dup_by_rarity['Elixir']}`")
+        st.write(f"⬛ Dark Elixir: `{dup_by_rarity['Dark Elixir']}`")
+        st.write(f"🟡 Builder Elixir: `{dup_by_rarity['Builder Elixir']}`")
+        st.write(f"⚡ Super Troops: `{dup_by_rarity['Super Troop']}`")
 
     with col_miss:
         st.markdown("**❌ Missing**")
-        st.caption("Extinct cards")
-        st.write(f"💧 Elixir: `{missing_elixir}`")
-        st.write(f"🖤 Dark: `{missing_dark_elixir}`")
-        st.write(f"🔨 Builder: `{missing_builder_elixir}`")
+        st.write(f"🟣 Elixir: `{missing_by_rarity['Elixir']}`")
+        st.write(f"⬛ Dark Elixir: `{missing_by_rarity['Dark Elixir']}`")
+        st.write(f"🟡 Builder Elixir: `{missing_by_rarity['Builder Elixir']}`")
+        st.write(f"⚡ Super Troops: `{missing_by_rarity['Super Troop']}`")
 
-# --- MAIN PAGE CONTINUES ---
+# --- MAIN PAGE ---
 col_title, _, col_refresh = st.columns([2.5, 1.0, 0.8], vertical_alignment="center")
 
 with col_title:
@@ -463,7 +446,6 @@ selected_players = st.multiselect(
 active_cols = [card_col, type_col] + selected_players
 filtered_df = live_df[active_cols].copy()
 
-# --- TABLE 1: CLEAN STANDARD DATA EDITOR ---
 edited_df = st.data_editor(
     filtered_df, 
     num_rows="dynamic", 
@@ -498,9 +480,6 @@ with grid_btn_col2:
 
 # --- 8. VECTORIZED OPTIMIZATION ENGINE & CANDIDATE GENERATOR ---
 def build_sparse_matrix(num_players, num_cards, inv_mat, candidates):
-    """
-    Directly builds a scipy csc_matrix using numpy array indices for lightning speed.
-    """
     num_candidates = len(candidates)
     num_supply = num_players * num_cards
     num_demand = num_players * num_cards
@@ -552,51 +531,33 @@ def build_sparse_matrix(num_players, num_cards, inv_mat, candidates):
 
 
 def generate_candidate_trades(inv_mat, catalog, all_cards, num_players, num_cards):
-    type_card_indices = {}
-    for c_idx, c_name in enumerate(all_cards):
-        c_info = catalog.get(c_name, {"Type": "Unknown", "IsSuper": False})
-        c_type = c_info["Type"]
-        type_card_indices.setdefault(c_type, []).append(c_idx)
-
-    # Track players with 100% true collection for a specific card type
-    player_completed_types = {p_idx: set() for p_idx in range(num_players)}
-    for p_idx in range(num_players):
-        for c_type, indices_list in type_card_indices.items():
-            # True set completion check: Player must own >0 copies of ALL cards of this type
-            if all(inv_mat[p_idx, c_i] > 0 for c_i in indices_list):
-                player_completed_types[p_idx].add(c_type)
-
     candidates = []
+
     for i in range(num_players):         # Player A (Initiator)
         for j in range(num_players):     # Player B (Partner)
             if i == j:
                 continue
 
             for g in range(num_cards):
-                # Player A must have a duplicate to give (>= 2)
+                # RULE 1: Player A must have at least 1 extra duplicate to give (>= 2)
                 if inv_mat[i, g] < 2:
                     continue
 
-                g_info = catalog.get(all_cards[g], {"Type": "Unknown", "IsSuper": False})
-                card_type = g_info["Type"]
-
-                # RULE 6: Player A cannot initiate if 100% of that type is collected
-                if card_type in player_completed_types[i]:
-                    continue
+                g_info = catalog.get(all_cards[g], {"Rarity": "Unknown"})
 
                 for r in range(num_cards):
-                    # RULE 2: Player A must receive an UNOWNED card (== 0)
+                    # RULE 2: Player A MUST NOT own the requested card (== 0)
                     if inv_mat[i, r] != 0:
                         continue
 
-                    # RULE 3: Player B must have a duplicate of requested card (>= 2)
+                    # RULE 3: Player B must have at least 1 duplicate of requested card (>= 2)
                     if inv_mat[j, r] < 2:
                         continue
 
-                    r_info = catalog.get(all_cards[r], {"Type": "Unknown", "IsSuper": False})
+                    r_info = catalog.get(all_cards[r], {"Rarity": "Unknown"})
 
-                    # RULE 4 & 5: Same card type + Player B can accept duplicate OR unowned
-                    if g_info["Type"] == r_info["Type"] and g_info["IsSuper"] == r_info["IsSuper"]:
+                    # RULE 4: Both troops MUST belong to the EXACT same Resource Group
+                    if g_info["Rarity"] == r_info["Rarity"]:
                         candidates.append((i, j, g, r))
 
     return candidates
@@ -607,16 +568,13 @@ def generate_recommendations(inv_mat, catalog, all_cards, player_names):
     recommendations = []
     seen_recommendations = set()
 
-    # 1. Loop through every player who has unowned cards (Initiator)
     for p_initiator in range(num_players):
         unowned_card_indices = np.where(inv_mat[p_initiator] == 0)[0]
 
-        # Loop through each of their unowned cards
         for c_idx in unowned_card_indices:
             card_req = all_cards[c_idx]
-            req_info = catalog.get(card_req, {"Type": "Unknown", "IsSuper": False})
+            req_info = catalog.get(card_req, {"Rarity": "Unknown"})
 
-            # 2. Look for ANY other player with exactly 1 copy (Partner)
             for p_partner in range(num_players):
                 if p_initiator == p_partner:
                     continue
@@ -626,24 +584,16 @@ def generate_recommendations(inv_mat, catalog, all_cards, player_names):
                     if rec_key in seen_recommendations:
                         continue
 
-                    # 3. Simulate +1 copy on the partner
                     inv_sim = inv_mat.copy()
                     inv_sim[p_partner, c_idx] += 1
 
-                    # 4. Check: Does p_initiator have ANY duplicate to give back?
                     valid_give_found = False
                     for g_idx in range(num_cards):
                         if inv_sim[p_initiator, g_idx] >= 2:
                             give_card = all_cards[g_idx]
-                            give_info = catalog.get(give_card, {"Type": "Unknown", "IsSuper": False})
+                            give_info = catalog.get(give_card, {"Rarity": "Unknown"})
 
-                            # Matching type and super condition
-                            if (give_info["Type"] == req_info["Type"] and 
-                                give_info["IsSuper"] == req_info["IsSuper"]):
-
-                                # Calculate actual benefit:
-                                # Initiator gains 1 unowned card (card_req).
-                                # Check if Partner also gains an unowned card (give_card):
+                            if give_info["Rarity"] == req_info["Rarity"]:
                                 partner_gained_unowned = 1 if inv_mat[p_partner, g_idx] == 0 else 0
                                 
                                 total_cards_gained = 1 + partner_gained_unowned
@@ -652,7 +602,7 @@ def generate_recommendations(inv_mat, catalog, all_cards, player_names):
                                 recommendations.append({
                                     "Player": player_names[p_partner],
                                     "Target Card": card_req,
-                                    "Type": req_info["Type"],
+                                    "Type": req_info["Rarity"],
                                     "Cards Gained": total_cards_gained,
                                     "Players Benefited": players_benefited,
                                     "Trades Unlocked": 1,
@@ -662,10 +612,10 @@ def generate_recommendations(inv_mat, catalog, all_cards, player_names):
                                 })
                                 seen_recommendations.add(rec_key)
                                 valid_give_found = True
-                                break # Stop checking give options once a valid trade is formed
+                                break
 
                     if valid_give_found:
-                        break # Stop checking other partners for this card once recorded
+                        break
 
     return recommendations
 
@@ -674,18 +624,10 @@ def run_optimization(data_df):
     card_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["card", "troop", "name"])]
     card_col = card_matches[0] if card_matches else data_df.columns[0]
 
-    type_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["type", "resource"])]
+    type_matches = [c for c in data_df.columns if any(k in str(c).lower() for k in ["type", "rarity", "resource"])]
     type_col = type_matches[0] if type_matches else (data_df.columns[1] if len(data_df.columns) > 1 else data_df.columns[0])
 
     player_cols = [c for c in data_df.columns if c not in [card_col, type_col]]
-
-    # Comprehensive list of Super Troops
-    SUPER_TROOPS_LIST = [
-        "Ice Hound", "Inferno Dragon", "Sneaky Goblin", "Rocket Balloon", "Super Archer", 
-        "Super Barbarian", "Super Bowler", "Super Dragon", "Super Giant", 
-        "Super Hog Rider", "Super Miner", "Super Minion", "Super Valkyrie", 
-        "Super Wall Breaker", "Super Witch", "Super Wizard", "Super Yeti"
-    ]
 
     catalog = {}
     for _, row in data_df.iterrows():
@@ -694,21 +636,12 @@ def run_optimization(data_df):
             continue
             
         name = raw_name.strip()
-        
-        # Override card classification logic for Super Troops
-        if any(s.lower() == name.lower() for s in SUPER_TROOPS_LIST):
-            card_type = "Super Troops"
-            is_super = True
-        else:
-            card_type = str(row[type_col]).strip()
-            is_super = "super" in name.lower()
+        card_rarity = CARD_RARITY_MAP.get(name, str(row[type_col]).strip())
 
         catalog[name] = {
-            "Type": card_type,
-            "IsSuper": is_super
+            "Rarity": card_rarity
         }
 
-    # Derive strictly from catalog keys to guarantee 100% string alignment
     all_cards = list(catalog.keys())
     num_players = len(player_cols)
     num_cards = len(all_cards)
@@ -722,11 +655,9 @@ def run_optimization(data_df):
             except Exception:
                 inv[p_idx, c_idx] = 0
 
-    # Generate candidates with updated strict business rules
     candidates = generate_candidate_trades(inv, catalog, all_cards, num_players, num_cards)
 
     num_candidates = len(candidates)
-    # Pass arguments in exact expected order: (inv_mat, catalog, all_cards, player_names)
     recs = generate_recommendations(inv, catalog, all_cards, player_cols)
 
     if num_candidates == 0:
@@ -736,15 +667,12 @@ def run_optimization(data_df):
 
     c_obj = np.zeros(num_candidates)
     for idx, (i, j, g, r) in enumerate(candidates):
-        g_info = catalog.get(all_cards[g], {"Type": "Unknown", "IsSuper": False})
-        is_super = g_info["IsSuper"]
-        
         i_gains_unowned = 1 if inv[i, r] == 0 else 0
         j_gains_unowned = 1 if inv[j, g] == 0 else 0
         total_unowned = i_gains_unowned + j_gains_unowned
 
         if total_unowned > 0:
-            c_obj[idx] = -(1000 * total_unowned + (25 if is_super else 0))
+            c_obj[idx] = -(1000 * total_unowned)
         else:
             c_obj[idx] = 1.0
 
@@ -774,13 +702,13 @@ def run_optimization(data_df):
             curr_state_mat[j, r] -= 1
             curr_state_mat[j, g] += 1
 
-            g_info = catalog.get(all_cards[g], {"Type": "Unknown", "IsSuper": False})
+            g_info = catalog.get(all_cards[g], {"Rarity": "Unknown"})
             executed_trades.append({
                 "Initiator": player_cols[i],
                 "Partner": player_cols[j],
                 "Give": all_cards[g],
                 "Receive": all_cards[r],
-                "Type": g_info["Type"]
+                "Type": g_info["Rarity"]
             })
 
     curr_state = {}
@@ -928,7 +856,7 @@ if st.session_state.active_trade is not None:
                     time.sleep(1.5)
                     st.rerun()
 
-    with btn_col1 if False else btn_col2:
+    with btn_col2:
         if st.button("❌ Cancel Trade", type="secondary", use_container_width=True):
             st.info("Trade cancelled.")
             st.session_state.active_trade = None
@@ -959,7 +887,6 @@ with col_b1:
                     "sol": sol, "recs": recs, "players": players, "updated_df": updated_df, "card_col": card_col
                 }
                 st.rerun()
-
 
 # --- 11. DISPLAY STAGED TRADE OPTIONS ---
 if (
@@ -1123,7 +1050,7 @@ if (
             st.session_state.stage_1_results, stage_num=1, can_initiate=True
         )
 
-    # --- 💡 UNLOCKABLE TRADES UI SECTION (ONLY IF NO DIRECT TRADES) ---
+    # --- 💡 UNLOCKABLE TRADES UI SECTION ---
     else:
         st.write("---")
         st.markdown("### 💡 Unlockable Trades (Recommendations)")
@@ -1185,7 +1112,7 @@ if (
                     <tr>
                         <th>Player</th>
                         <th>Target Card</th>
-                        <th>Type</th>
+                        <th>Resource Group</th>
                         <th>Cards Gained</th>
                         <th>Players Benefited</th>
                         <th>Trades Unlocked</th>
