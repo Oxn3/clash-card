@@ -17,8 +17,6 @@ socket.setdefaulttimeout(5)
 # --- 1. PAGE SETUP ---
 st.set_page_config(page_title="Clash Trade Optimizer", layout="wide", page_icon="⚔️")
 
-st.title("⚔️ Clash Cards Trade Optimizer")
-
 # --- 2. CONFIGURATION: MASTER CLAN REGISTRY URL ---
 try:
     MASTER_REGISTRY_URL = st.secrets["MASTER_REGISTRY_URL"]
@@ -270,10 +268,70 @@ if not st.session_state.authenticated:
             except Exception:
                 st.sidebar.error("❌ Unable to verify credentials right now. Please try again.")
 
-    st.warning("⚠️ Please log in via sidebar to access your clan data.")
+    # --- UNAUTHENTICATED LANDING PAGE HOME VIEW ---
+    st.markdown("""
+        <div style="text-align: center; padding: 10px 0px 25px 0px;">
+            <h1 style="font-size: 2.8rem; margin-bottom: 10px;">⚔️ Clash Cards Trade Optimizer</h1>
+            <p style="font-size: 1.2rem; color: #9CA3AF; max-width: 800px; margin: 0 auto;">
+                Maximize your clan's card collection efficiently using MILP linear optimization. 
+                Trade duplicate cards, unlock missing troops, and track real-time clan progress.
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    st.info("👈 **Get Started:** Enter your **Clan Tag**, **Player Name**, and **Password** in the sidebar to log in or register your clan.")
+    st.divider()
+
+    st.subheader("✨ Key Features & Capability Overview")
+    
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Player Summary Report", 
+        "📋 Live Inventory Grid", 
+        "⚡ Trade Optimizer Engine"
+    ])
+
+    with tab1:
+        st.markdown("### 📊 Personal Card Analytics")
+        st.caption("Get an instant snapshot of owned cards, available duplicates for trading, and missing card requirements categorized by resource group.")
+        st.image("image_0b1f17.png", use_container_width=True, caption="Detailed Player Report View")
+
+    with tab2:
+        st.markdown("### 📋 Interactive Inventory Management")
+        st.caption("Directly view and edit troop counts across all clan members in real-time. Changes sync directly to your connected Google Sheet.")
+        st.image("image_0abd5f.png", use_container_width=True, caption="Live Inventory Table Editor")
+
+    with tab3:
+        st.markdown("### ⚡ Step-by-Step MILP Trade Execution")
+        st.caption("Our optimization engine calculates fair 1-to-1 card trades across members to maximize the total number of missing cards gained.")
+        st.image("image_0aba74.png", use_container_width=True, caption="Calculated Trade Steps")
+
+    st.divider()
+
+    st.subheader("🛠️ How It Works")
+    step1, step2, step3 = st.columns(3)
+    
+    with step1:
+        st.markdown("""
+        #### 1️⃣ Connect
+        Log in with your Clan Tag and account, or register a new Google Sheet template for your clan.
+        """)
+        
+    with step2:
+        st.markdown("""
+        #### 2️⃣ Update Inventory
+        Fill in your card numbers in the live editable grid or directly in your clan's Google Sheet.
+        """)
+        
+    with step3:
+        st.markdown("""
+        #### 3️⃣ Optimize & Trade
+        Click **Calculate Trade Options** to generate optimal trade chains and confirm trades in real-time.
+        """)
+
     st.stop()
 
 # --- IF AUTHENTICATED ---
+st.title("⚔️ Clash Cards Trade Optimizer")
 st.sidebar.success(f"🟢 Connected: **{st.session_state.clan_tag}**")
 
 # Load live data early so player_cols is accessible for sidebar setup
