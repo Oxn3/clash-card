@@ -178,7 +178,7 @@ def generate_excel_template():
 st.sidebar.header("🔑 Clan Portal")
 
 if not st.session_state.authenticated:
-    st.sidebar.info("Enter your Clan Tag, Player Name, and Password.")
+    st.sidebar.info("Enter your Clan Tag, GSheet Player Name, and Clan Password.")
     
     clan_tag_input = st.sidebar.text_input("Clan Tag", value="#CLAN123").strip().upper()
     player_name_input = st.sidebar.text_input("Your Player Name").strip()
