@@ -86,13 +86,13 @@ CARD_RARITY_MAP = {
     "Wall Breaker": "Elixir", "Balloon": "Elixir", "Wizard": "Elixir", "Healer": "Elixir",
     "Dragon": "Elixir", "P.E.K.K.A": "Elixir", "P.E.K.K.A.": "Elixir", "Baby Dragon": "Elixir", 
     "Miner": "Elixir", "Electro Dragon": "Elixir", "Yeti": "Elixir", "Dragon Rider": "Elixir", 
-    "Electro Titan": "Elixir", "Root Rider": "Elixir", "Meteor Golem": "Elixir",
+    "Electro Titan": "Elixir", "Root Rider": "Elixir", "Thrower": "Elixir", "Meteor Golem": "Elixir",
     
     # ⬛ Home Village Dark Elixir
     "Minion": "Dark Elixir", "Hog Rider": "Dark Elixir", "Valkyrie": "Dark Elixir", 
     "Golem": "Dark Elixir", "Witch": "Dark Elixir", "Lava Hound": "Dark Elixir", 
     "Bowler": "Dark Elixir", "Ice Golem": "Dark Elixir", "Headhunter": "Dark Elixir", 
-    "Apprentice Warden": "Dark Elixir", "Druid": "Dark Elixir", "Thrower": "Dark Elixir",
+    "Apprentice Warden": "Dark Elixir", "Druid": "Dark Elixir",
 
     # 🟡 Builder Base Elixir
     "Raged Barbarian": "Builder Elixir", "Sneaky Archer": "Builder Elixir", "Boxer Giant": "Builder Elixir",
