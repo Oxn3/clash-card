@@ -309,7 +309,13 @@ completed_players_count = sum(
     1 for p in player_cols 
     if (pd.to_numeric(live_df[p], errors='coerce').fillna(0) > 0).all()
 )
-incomplete_players_count = total_players - completed_players_count
+
+# Total unowned card slots across all players
+total_missing_slots = sum(
+    1 for p in player_cols
+    for _, row in live_df.iterrows()
+    if (pd.to_numeric(row[p], errors='coerce') or 0) == 0
+)
 
 total_trades_count = 0
 cards_gained_count = 0
@@ -361,9 +367,11 @@ if player_gains:
     top_player_count = player_gains[top_player_name]
 
 total_cards_in_catalog = len(live_df)
+
+# Unique cards missing by AT LEAST ONE player
 unique_missing_cards = sum(
     1 for _, row in live_df.iterrows()
-    if all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
+    if any((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
 )
 
 st.sidebar.subheader("📊 Clan Stats")
@@ -374,17 +382,19 @@ with row1_col1:
 with row1_col2:
     st.metric("🎉 Cards Gained", cards_gained_count)
 
+# Row 2: Event Progress & Top Collector
 row2_col1, row2_col2 = st.sidebar.columns(2)
 with row2_col1:
     st.metric("✅ Completed Event", f"{completed_players_count} / {total_players}")
 with row2_col2:
-    st.metric("⏳ Still Collecting", incomplete_players_count)
+    st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
 
+# Row 3: Grouped Inventory Gap Metrics (Unique Missing + Total Missing Slots)
 row3_col1, row3_col2 = st.sidebar.columns(2)
 with row3_col1:
     st.metric("❌ Unique Missing", f"{unique_missing_cards} / {total_cards_in_catalog}")
 with row3_col2:
-    st.metric(f"🏆 {top_player_name if top_player_count > 0 else 'Top Collector'}", f"{top_player_count}" if top_player_count > 0 else "0")
+    st.metric("🎯 Total Missing Slots", total_missing_slots)
 
 # Breakdowns by Resource Group
 dup_by_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super Troop": 0}
@@ -393,19 +403,21 @@ missing_by_rarity = {"Elixir": 0, "Dark Elixir": 0, "Builder Elixir": 0, "Super 
 for _, row in live_df.iterrows():
     card_name = str(row[card_col]).strip()
     r_rarity = CARD_RARITY_MAP.get(card_name, str(row[type_col]).strip())
-    
-    all_missing = all((pd.to_numeric(row[p], errors='coerce') or 0) == 0 for p in player_cols)
-    if all_missing and r_rarity in missing_by_rarity:
-        missing_by_rarity[r_rarity] += 1
 
     for p in player_cols:
         try:
-            val = int(row[p]) if pd.notnull(row[p]) else 0
-            dups = max(0, val - 1)
+            val = int(pd.to_numeric(row[p], errors='coerce')) if pd.notnull(row[p]) else 0
+        except (ValueError, TypeError):
+            val = 0
+
+        # Count total missing slots across all players
+        if val == 0:
+            if r_rarity in missing_by_rarity:
+                missing_by_rarity[r_rarity] += 1
+        # Count total duplicate copies available for trade (count > 1)
+        elif val > 1:
             if r_rarity in dup_by_rarity:
-                dup_by_rarity[r_rarity] += dups
-        except ValueError:
-            pass
+                dup_by_rarity[r_rarity] += (val - 1)
 
 with st.sidebar.expander("📦 Clan Card Breakdown", expanded=True) as breakdown_expander:
     col_dup, col_miss = breakdown_expander.columns(2)
